@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pocket Putt</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="description" content="Nine holes of touch-friendly mini golf: windmills, bunkers, bumpers, portals and a volcano.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Pocket Putt">
+<meta name="theme-color" content="#123321">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;800&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<canvas id="game" aria-label="Golf course. Drag anywhere to aim, release to putt."></canvas>
+
+<header id="hud" hidden>
+  <div class="hud-hole">
+    <div class="hud-kicker">Hole <b id="hNum">1</b>/<span id="hCount">9</span></div>
+    <div class="hud-name" id="hName">Opening Drive</div>
+  </div>
+  <div class="hud-stats">
+    <div class="stat"><span>Par</span><b id="hPar">2</b></div>
+    <div class="stat"><span>Strokes</span><b id="hStrokes">0</b></div>
+    <div class="stat" id="hTotalWrap"><span>Round</span><b id="hTotal">E</b></div>
+  </div>
+  <div class="hud-btns">
+    <button id="btnRestart" class="icon-btn" aria-label="Restart hole">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7" /><path d="M4 4v5h5" /></svg>
+    </button>
+    <button id="btnMenu" class="icon-btn" aria-label="Pause menu">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14" /></svg>
+    </button>
+  </div>
+</header>
+
+<div id="banner" aria-live="polite"></div>
+
+<div id="hint" hidden>
+  <div class="hint-anim" aria-hidden="true"><i></i></div>
+  <p>Touch anywhere and <b>pull back</b> to aim.<br>Pull further for more power, then let go.</p>
+</div>
+
+<section id="title" class="screen">
+  <div class="panel title-panel">
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 120 120">
+        <circle cx="60" cy="86" r="26" fill="#0c140c" />
+        <ellipse cx="60" cy="86" rx="26" ry="26" fill="none" stroke="#fff" stroke-width="3" />
+        <path d="M60 86V14" stroke="#efeae0" stroke-width="5" stroke-linecap="round" />
+        <path d="M62 16c14 2 22 8 34 8-8 6-18 10-34 14z" fill="#e8433a" />
+        <circle cx="38" cy="92" r="11" fill="#fff" />
+      </svg>
+    </div>
+    <h1>Pocket<br><span>Putt</span></h1>
+    <p class="tag" id="bestLine">9 holes · Par 26</p>
+    <div class="menu">
+      <button id="btnContinue" class="btn primary" hidden>Continue</button>
+      <button id="btnPlay" class="btn primary">New Round</button>
+      <button id="btnPractice" class="btn">Practice a Hole</button>
+    </div>
+    <button id="btnSound" class="link-btn" aria-pressed="true">Sound on</button>
+  </div>
+</section>
+
+<section id="practice" class="screen" hidden>
+  <div class="panel wide">
+    <h2>Practice</h2>
+    <p class="sub">Pick any hole. Scores here don't count toward a round.</p>
+    <div id="holeGrid" class="hole-grid"></div>
+    <button id="btnPracticeBack" class="btn">Back</button>
+  </div>
+</section>
+
+<section id="card" class="screen" hidden data-tone="good">
+  <div class="panel card-panel">
+    <p class="kicker" id="cardHole">Hole 1</p>
+    <h2 id="cardTerm">Birdie!</h2>
+    <p class="sub" id="cardSub">2 strokes on a par 3</p>
+    <p class="pill" id="cardTotal">Round: −1</p>
+    <div class="menu">
+      <button id="btnNext" class="btn primary">Next Hole</button>
+      <button id="btnCardMenu" class="btn" hidden>Other Holes</button>
+    </div>
+  </div>
+</section>
+
+<section id="pause" class="screen" hidden>
+  <div class="panel wide">
+    <h2>Paused</h2>
+    <div id="pauseCard"></div>
+    <div class="menu row">
+      <button id="btnResume" class="btn primary">Resume</button>
+      <button id="btnPauseRestart" class="btn">Restart Hole</button>
+      <button id="btnPauseSound" class="btn">Sound: On</button>
+      <button id="btnQuit" class="btn">Quit to Menu</button>
+    </div>
+  </div>
+</section>
+
+<section id="final" class="screen" hidden>
+  <div class="panel wide">
+    <p class="kicker">Round complete</p>
+    <div class="final-score"><b id="finalScore">26</b><span id="finalRel">Even par</span></div>
+    <p class="best" id="finalBest">New personal best!</p>
+    <div id="finalCard"></div>
+    <div class="menu row">
+      <button id="btnAgain" class="btn primary">Play Again</button>
+      <button id="btnFinalMenu" class="btn">Main Menu</button>
+    </div>
+  </div>
+</section>
+
+<script type="module" src="src/game.js"></script>
+</body>
+</html>
