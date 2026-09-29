@@ -25,12 +25,23 @@ export const CLUBS = [
   { id: 'P', name: 'Putter', putter: true, up: 1.15, win: 1 },
 ];
 export const PUTTER = CLUBS.length - 1;
+
+// Shot shapes. Punch stays under the branches and runs out; High climbs over
+// trouble but loses distance and is harder to time.
+export const SHAPES = [
+  { id: 'normal', name: 'Normal', carry: 1, apex: 1, time: 1, roll: 1, rollAdd: 0, win: 1 },
+  { id: 'punch', name: 'Punch', carry: 0.6, apex: 0.13, maxApex: 2.3, time: 0.62, roll: 2.4, rollAdd: 7, win: 1.15 },
+  { id: 'high', name: 'High', carry: 0.88, apex: 1.45, time: 1.1, roll: 0.35, rollAdd: 0, win: 0.85 },
+];
 export const PUTT_SCALES = [5, 10, 20, 35]; // yards covered at 100% on a flat green
 
 // How each surface slows a rolling ball (yd/s²) and how much it lets a
 // landing ball release forward.
 const DECEL = { [T.TEE]: 2.2, [T.FAIRWAY]: 2.2, [T.FRINGE]: 1.5, [T.GREEN]: 0.62, [T.ROUGH]: 6.5, [T.DEEP]: 13, [T.SAND]: 26, [T.OB]: 6, [T.WATER]: 30 };
 const RELEASE = { [T.TEE]: 1, [T.FAIRWAY]: 1, [T.FRINGE]: 0.7, [T.GREEN]: 0.55, [T.ROUGH]: 0.35, [T.DEEP]: 0.15, [T.SAND]: 0.02, [T.OB]: 0.3 };
+
+// How much backspin can grip on each surface.
+const SPIN_GRIP = { [T.GREEN]: 1, [T.FRINGE]: 0.7, [T.FAIRWAY]: 0.55, [T.TEE]: 0.5, [T.ROUGH]: 0.15 };
 
 // Lie effects: distance multiplier, random "flyer" spread, accuracy window.
 export function lieEffect(lie, club) {
@@ -49,8 +60,9 @@ export function lieEffect(lie, club) {
 }
 
 // Accuracy window half-width in meter units (0 = sweet spot, 1 = full power).
-export function meterWindow(lie, club, power) {
-  let w = 0.07 * CLUBS[club].win * lieEffect(lie, club).win;
+export function meterWindow(lie, club, power, shape = 0, spinMag = 0) {
+  let w = 0.07 * CLUBS[club].win * lieEffect(lie, club).win * (CLUBS[club].putter ? 1 : SHAPES[shape].win);
+  w *= 1 - 0.12 * Math.min(1, spinMag); // shaping the ball is harder
   if (power > 1) w *= 1 - (power - 1) * 4; // overswing narrows the window
   return Math.max(0.012, w);
 }
@@ -84,43 +96,21 @@ export function simulateShot(hole, ball, input, wind, seed) {
     return finish(hole, ball, res);
   }
 
-  const lie = lieEffect(ball.lie, input.club);
-  const e = input.acc;
-  const mishit = Math.abs(e) > 1;
-  res.label = shotLabel(e);
-  const p = input.power;
-  const powerDist = p <= 1 ? p : 1 + (p - 1) * 0.8;
-  let carry = club.carry * powerDist * lie.dist * (1 + (r() - 0.5) * 2 * lie.spread);
-  if (mishit) carry *= 0.55;
-  else carry *= 1 - Math.max(0, Math.abs(e) - 0.22) * 0.06;
-  const flight = club.time * (0.45 + 0.55 * Math.min(1, p));
-  const apex = club.apex * (0.4 + 0.6 * Math.min(1, p)) * (mishit && e < 0 ? 0.35 : 1);
-
-  // Wind: component along the aim line changes carry, crosswind drifts the ball.
-  const wx = Math.cos(wind.dir) * wind.speed, wy = Math.sin(wind.dir) * wind.speed;
-  const along = wx * dx + wy * dy;
-  const cross = wx * rx + wy * ry;
-  carry = Math.max(3, carry + along * 0.26 * flight * (apex / 30));
-  const drift = cross * 0.3 * flight * (apex / 30);
-  const curve = (mishit ? Math.sign(e) * 0.25 : e * 0.11) * carry;
-  const push = e * 0.02; // start line a touch off with mistimed swings
+  const fp = flightParams(ball, input, wind, r);
+  const { carry, flight, apex, mishit } = fp;
+  res.label = shotLabel(input.acc);
   res.carry = carry;
+  const p = input.power;
+  const passed = new Set();
 
   const n = Math.max(2, Math.round(flight * FPS));
   let hitTree = null;
   for (let i = 0; i <= n; i++) {
-    const s = i / n;
-    const alongD = carry * (1 - Math.pow(1 - s, 1.6));
-    const lat = push * alongD + curve * s * s + drift * Math.pow(s, 1.5);
-    const x = ball.x + dx * alongD + rx * lat;
-    const y = ball.y + dy * alongD + ry * lat;
-    const sp = Math.pow(s, 1.25);
-    const z = 4 * apex * sp * (1 - sp);
-    // Trees stop balls that are lower than the canopy.
-    if (i > 3) {
-      for (const t of hole.treesNear(x, y)) {
-        if (z < t.h && Math.hypot(x - t.x, y - t.y) < t.r) { hitTree = { x, y, z, t }; break; }
-      }
+    const { x, y, z } = flightPoint(ball, fp, i / n);
+    // Branches stop the ball; it can pass under the canopy or clip the edge.
+    if (i > 2) {
+      const t = treeAt(hole, x, y, z, passed, r);
+      if (t) hitTree = { x, y, z, t: t.t };
     }
     frames.push({ x, y, z });
     if (hitTree) break;
@@ -162,8 +152,21 @@ export function simulateShot(hole, ball, input, wind, seed) {
   let hx = last.x - prev.x, hy = last.y - prev.y;
   const hl = Math.hypot(hx, hy) || 1;
   hx /= hl; hy /= hl;
-  let rollDist = club.roll * (RELEASE[land] ?? 0.3) * Math.min(1, p) * (mishit ? 2 : 1);
+  let rollDist = (club.roll * fp.shape.roll + fp.shape.rollAdd) * (RELEASE[land] ?? 0.3) * Math.min(1, p) * (mishit ? 2 : 1);
   if (p > 1) rollDist *= 1.15;
+  // Topspin releases the ball; backspin grips, and a wedge can zip it backwards.
+  rollDist *= 1 + 1.2 * fp.top;
+  const bite = (club.wedge ? 1 : club.carry > 200 ? 0.25 : 0.6) * (SPIN_GRIP[land] ?? 0) * Math.min(1, p) * (mishit ? 0 : 1);
+  rollDist -= fp.back * bite * 8;
+  // Side spin kicks the ball sideways as it lands.
+  const kick = fp.spin.x * 0.22;
+  [hx, hy] = [hx * Math.cos(kick) - hy * Math.sin(kick), hx * Math.sin(kick) + hy * Math.cos(kick)];
+  if (rollDist < 0) {
+    hx = -hx;
+    hy = -hy;
+    rollDist = -rollDist;
+    if (rollDist > 0.8) res.events.push({ type: 'spinback', f: frames.length - 1 });
+  }
   const v0 = Math.sqrt(2 * DECEL[land] * rollDist);
   roll(hole, last.x, last.y, hx * v0, hy * v0, frames, res, Math.min(apex * 0.06, 1.6));
   return finish(hole, ball, res);
@@ -265,6 +268,94 @@ function finish(hole, ball, res, at) {
   }
   res.final = { x: last.x, y: last.y, lie: hole.terrainAt(last.x, last.y) };
   return res;
+}
+
+// Everything that shapes a full shot's flight. r supplies the lie's random
+// spread (a neutral 0.5 for previews).
+export function flightParams(ball, input, wind, r = () => 0.5) {
+  const club = CLUBS[input.club];
+  const shape = SHAPES[input.shape || 0];
+  const lie = lieEffect(ball.lie, input.club);
+  const e = input.acc || 0;
+  const mishit = Math.abs(e) > 1;
+  const p = input.power;
+  const powerDist = p <= 1 ? p : 1 + (p - 1) * 0.8;
+  const spin = input.spin || { x: 0, y: 0 };
+  const top = Math.max(0, spin.y), back = Math.max(0, -spin.y);
+  let carry = club.carry * shape.carry * powerDist * lie.dist * (1 + (r() - 0.5) * 2 * lie.spread);
+  carry *= 1 - 0.05 * Math.min(1, Math.hypot(spin.x, spin.y));
+  if (mishit) carry *= 0.55;
+  else carry *= 1 - Math.max(0, Math.abs(e) - 0.22) * 0.06;
+  const flight = club.time * shape.time * (0.45 + 0.55 * Math.min(1, p));
+  let apex = club.apex * shape.apex * (0.4 + 0.6 * Math.min(1, p)) * (mishit && e < 0 ? 0.35 : 1);
+  apex *= (1 - 0.25 * top) * (1 + 0.12 * back);
+  if (shape.maxApex) apex = Math.min(apex, shape.maxApex);
+  const [dx, dy] = dirOf(input.aim);
+  const [rx, ry] = [-dy, dx];
+  // Wind: component along the aim line changes carry, crosswind drifts the ball.
+  const wx = Math.cos(wind.dir) * wind.speed, wy = Math.sin(wind.dir) * wind.speed;
+  const along = wx * dx + wy * dy;
+  const cross = wx * rx + wy * ry;
+  carry = Math.max(3, carry + along * 0.26 * flight * (apex / 30));
+  return {
+    carry, flight, apex, mishit, shape, dx, dy, rx, ry,
+    drift: cross * 0.3 * flight * (apex / 30),
+    // side spin bends the ball on purpose; timing errors add to it
+    curve: ((mishit ? Math.sign(e) * 0.25 : e * 0.11) + spin.x * 0.07) * carry,
+    spin, top, back,
+    push: e * 0.02, // start line a touch off with mistimed swings
+  };
+}
+
+export function flightPoint(ball, fp, s) {
+  const alongD = fp.carry * (1 - Math.pow(1 - s, 1.6));
+  const lat = fp.push * alongD + fp.curve * s * s + fp.drift * Math.pow(s, 1.5);
+  const sp = Math.pow(s, 1.25);
+  return {
+    x: ball.x + fp.dx * alongD + fp.rx * lat,
+    y: ball.y + fp.dy * alongD + fp.ry * lat,
+    z: 4 * fp.apex * sp * (1 - sp),
+    along: alongD,
+  };
+}
+
+// Does a ball at (x, y, z) hit a tree? Trunks stop low balls; the canopy
+// only matters between its base and top. Near the canopy edge a ball gets
+// through half the time (only when r is given; previews count it as a hit).
+export function treeAt(hole, x, y, z, passed, r) {
+  for (const t of hole.treesNear(x, y)) {
+    if (passed && passed.has(t)) continue;
+    const d = Math.hypot(x - t.x, y - t.y);
+    if (d < 0.5 && z < t.h) return { t, edge: false };
+    if (d < t.r && z >= t.base && z < t.h) {
+      const edge = d > t.r * 0.7;
+      if (edge && r) {
+        if (r() < 0.5) {
+          passed.add(t);
+          continue;
+        }
+      }
+      return { t, edge };
+    }
+  }
+  return null;
+}
+
+// Side-view preview of a shot with no wind and a perfect strike.
+export function previewShot(hole, ball, input) {
+  const fp = flightParams(ball, { ...input, acc: 0 }, { speed: 0, dir: 0 });
+  const pts = [];
+  let hit = null;
+  const n = Math.max(40, Math.round(fp.carry * 1.5));
+  for (let i = 0; i <= n; i++) {
+    const q = flightPoint(ball, fp, i / n);
+    pts.push({ d: q.along, z: q.z });
+    if (!hit && i > 0) {
+      const t = treeAt(hole, q.x, q.y, q.z, null, null);
+      if (t) hit = { d: q.along, z: q.z, edge: t.edge };
+    }
+  }
+  return { carry: fp.carry, apex: fp.apex, pts, hit };
 }
 
 export function shotSeed(gameSeed, hole, player, stroke) {
