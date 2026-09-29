@@ -12,6 +12,7 @@ No build step and no dependencies: plain HTML, CSS and JavaScript modules.
   2. Tap to set power. The numbers are yards; past 100% is extra distance with a tighter timing window.
   3. Tap on the white line as the marker comes back. Early fades or slices right, late draws or hooks left. Miss badly and you shank or duff it.
 - **Shot shape:** tap *Shot* to switch between Normal, **Punch** (flies about head high under the branches and runs out, for getting out of trees) and **High** (climbs over trouble, shorter and harder to time).
+- **Spin:** tap or drag on the little ball where you want to strike it. Low is backspin (stops fast; a wedge onto a green can zip back), high is topspin (lower flight, more roll), and left or right draws or fades the ball, with the aim line bending to match. Spin narrows the timing window slightly. Double-tap the ball to clear it.
 - **Side view:** when trees are near your line, a side-on view shows the flight at the power you're swinging, plus faint arcs at 100%, 75% and 50%. It says whether the shot clears, may clip a tree (amber) or hits one (red), and the aim line turns red too. Tap *Side* to keep it open.
 - **Trees:** trunks stop low balls and canopies stop balls between the lowest branches and the treetop. A ball that only catches the edge of a canopy gets through about half the time.
 - **Wind** (arrow at the top, and the flag) pushes the ball sideways and changes carry.

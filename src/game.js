@@ -1,6 +1,6 @@
 import { buildHole, windFor, HOLES, T, TERRAIN_NAMES } from './course.js';
 import {
-  simulateShot, CLUBS, PUTTER, PUTT_SCALES, SHAPES, meterWindow, lieEffect, suggestClub, suggestPuttScale, shotSeed, shotLabel, previewShot,
+  simulateShot, CLUBS, PUTTER, PUTT_SCALES, SHAPES, meterWindow, lieEffect, suggestClub, suggestPuttScale, shotSeed, shotLabel, previewShot, flightParams, flightPoint,
 } from './sim.js';
 import { Renderer } from './render.js';
 import { Sound } from './audio.js';
@@ -104,6 +104,7 @@ const U = {
   online: null, // { link, role, code, peerSeen, peerName }
   club: 0,
   shape: 0,
+  spin: { x: 0, y: 0 },
   sidePinned: false,
   aim: 0,
   puttScale: 10,
@@ -141,6 +142,19 @@ function isLocal(p) {
 
 function currentBall() {
   return G.players[G.turn].ball;
+}
+
+function spinMag() {
+  return CLUBS[U.club].putter ? 0 : Math.hypot(U.spin.x, U.spin.y);
+}
+
+function spinName(sp) {
+  const v = sp.y > 0.2 ? 'Topspin' : sp.y < -0.2 ? 'Backspin' : '';
+  const h = sp.x > 0.2 ? 'fade' : sp.x < -0.2 ? 'draw' : '';
+  if (v && h) return `${v} + ${h}`;
+  if (v) return v;
+  if (h) return h[0].toUpperCase() + h.slice(1);
+  return 'No spin';
 }
 
 function clubCarry(ci, lie) {
@@ -274,6 +288,7 @@ function enterTurn() {
     const dist = toPin(hole, ball);
     U.club = suggestClub(dist, ball.lie);
     U.shape = 0;
+    U.spin = { x: 0, y: 0 };
     U.puttScale = suggestPuttScale(dist);
     U.aim = defaultAim(ball, U.club);
     const needPass = G.mode === 'hotseat' && U.lastPlayer !== -1 && U.lastPlayer !== p;
@@ -305,7 +320,8 @@ function defaultAim(ball, ci) {
 function takeShot(power, acc) {
   const p = G.turn;
   const ball = G.players[p].ball;
-  const input = { club: U.club, aim: U.aim, power, acc, puttScale: U.puttScale, shape: CLUBS[U.club].putter ? 0 : U.shape };
+  const putter = CLUBS[U.club].putter;
+  const input = { club: U.club, aim: U.aim, power, acc, puttScale: U.puttScale, shape: putter ? 0 : U.shape, spin: putter ? { x: 0, y: 0 } : { ...U.spin } };
   const res = simulateShot(hole, ball, input, wind, shotSeed(G.seed, G.h, p, G.n));
   const after = applyShot(G, hole, p, res);
   if (U.online) U.online.link.send({ t: 'shot', n: G.n, p, input, after });
@@ -388,6 +404,9 @@ function fireEvent(ev, a) {
       break;
     case 'lip':
       sound.lip();
+      break;
+    case 'spinback':
+      popup('Spin back!', '#9fe3ff', 1.4, 28);
       break;
     case 'dunk':
       break;
@@ -530,7 +549,7 @@ function swingTap(ts) {
 
 function finishSwing(power, m) {
   const ball = currentBall();
-  const w = meterWindow(ball.lie, U.club, power, U.shape);
+  const w = meterWindow(ball.lie, U.club, power, U.shape, spinMag());
   takeShot(power, m / w);
 }
 
@@ -589,7 +608,7 @@ function drawMeter() {
     c.fillRect(X(1), top, X(METER_MAX) - X(1), bh);
     // accuracy window
     const pw = s.phase === 'down' ? s.power : 1;
-    const w = meterWindow(ball.lie, U.club, pw, U.shape);
+    const w = meterWindow(ball.lie, U.club, pw, U.shape, spinMag());
     c.fillStyle = 'rgba(120,230,120,0.35)';
     c.fillRect(X(-w), top, X(w) - X(-w), bh);
     c.fillStyle = 'rgba(255,240,140,0.8)';
@@ -732,6 +751,11 @@ function updatePanel() {
   $('#shapeBtn').hidden = !!club.putter;
   $('#shapeBtn').textContent = `Shot: ${SHAPES[U.shape].name}`;
   $('#shapeBtn').classList.toggle('on', U.shape !== 0);
+  $('.spin-col').hidden = !!club.putter;
+  const R0 = 25;
+  $('#spinDot').style.transform = `translate(${U.spin.x * R0}px, ${-U.spin.y * R0}px)`;
+  $('#spinLabel').textContent = spinName(U.spin);
+  $('#spinLabel').classList.toggle('on', spinMag() > 0);
   const s = U.swing.phase;
   $('#swingHint').textContent = club.putter
     ? s === 'idle' ? 'Tap to start the putt' : 'Tap to set the pace'
@@ -813,6 +837,15 @@ function render(dt) {
       ticks: [0.25, 0.5, 0.75],
       ring: club.putter ? 0.3 : 2.5,
     };
+    if (!club.putter && U.spin.x !== 0) {
+      // Show the intended curve from side spin (no wind, perfect strike).
+      const fp = flightParams(ball, { club: U.club, aim: U.aim, power: currentPower(), shape: U.shape, spin: U.spin, acc: 0 }, { speed: 0, dir: 0 });
+      scene.aim.path = [];
+      for (let i = 0; i <= 30; i++) {
+        const q = flightPoint(ball, fp, i / 30);
+        scene.aim.path.push([q.x, q.y, q.along / fp.carry]);
+      }
+    }
   }
   scene.showSlope = U.cam.scale > 7 && (ball.lie === T.GREEN || ball.lie === T.FRINGE || CLUBS[U.club].putter);
   const side = drawSide();
@@ -1370,6 +1403,47 @@ $('#rangeBtn').addEventListener('click', () => {
   sound.click();
   updatePanel();
 });
+// Spin ball: where you'd strike the ball. Up = topspin, down = backspin.
+{
+  const el = $('#spinBall');
+  let lastTap = 0, active = null;
+  const set = (e) => {
+    const r = el.getBoundingClientRect();
+    let x = (e.clientX - (r.left + r.width / 2)) / (r.width / 2 - 8);
+    let y = -(e.clientY - (r.top + r.height / 2)) / (r.height / 2 - 8);
+    const m = Math.hypot(x, y);
+    if (m > 1) { x /= m; y /= m; }
+    if (m < 0.18) { x = 0; y = 0; }
+    U.spin = { x: Math.round(x * 20) / 20, y: Math.round(y * 20) / 20 };
+    updatePanel();
+  };
+  el.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    if (U.phase !== 'aim' || U.swing.phase !== 'idle') return;
+    const now = performance.now();
+    if (now - lastTap < 320) {
+      U.spin = { x: 0, y: 0 };
+      lastTap = 0;
+      updatePanel();
+      sound.click();
+      return;
+    }
+    lastTap = now;
+    active = e.pointerId;
+    try { el.setPointerCapture(e.pointerId); } catch {}
+    set(e);
+    sound.tick();
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (active === e.pointerId) set(e);
+  });
+  const end = (e) => {
+    if (active === e.pointerId) active = null;
+  };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+}
+
 $('#shapeBtn').addEventListener('click', () => {
   if (U.phase !== 'aim' || U.swing.phase !== 'idle') return;
   U.shape = (U.shape + 1) % SHAPES.length;

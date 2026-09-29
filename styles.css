@@ -162,7 +162,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--gold); outl
 }
 .panel-mine {
   display: grid;
-  grid-template-columns: 250px 1fr 120px;
+  grid-template-columns: 250px 1fr auto;
   gap: 12px;
   align-items: center;
   min-width: 0;
@@ -212,9 +212,41 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--gold); outl
   pointer-events: none;
 }
 #meter { position: absolute; left: 0; top: 0; width: 100%; height: calc(100% - 18px); }
-.aim-box { display: flex; flex-direction: column; align-items: center; gap: 6px; }
-.aim-box > span { font-size: 11px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
-.aim-box > div { display: flex; gap: 8px; }
+.aim-box { display: flex; align-items: center; gap: 10px; }
+.aim-btns { display: flex; flex-direction: column; gap: 6px; }
+.aim-btns .icon-btn { width: 44px; height: 44px; }
+.spin-col { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.spin-ball {
+  position: relative;
+  width: 66px;
+  height: 66px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #ffffff, #e9eeec 55%, #b3bdbf);
+  box-shadow: inset 0 -3px 8px rgba(0, 0, 0, 0.25), 0 3px 8px rgba(0, 0, 0, 0.35);
+  touch-action: none;
+  cursor: pointer;
+}
+.spin-ball::before, .spin-ball::after {
+  content: "";
+  position: absolute;
+  background: rgba(30, 50, 35, 0.18);
+}
+.spin-ball::before { left: 50%; top: 8px; bottom: 8px; width: 1px; }
+.spin-ball::after { top: 50%; left: 8px; right: 8px; height: 1px; }
+#spinDot {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border-radius: 50%;
+  background: var(--flag);
+  box-shadow: 0 0 0 2px #fff, 0 1px 4px rgba(0, 0, 0, 0.4);
+  z-index: 1;
+}
+.spin-label { font-size: 11px; font-weight: 800; color: var(--muted); white-space: nowrap; }
+.spin-label.on { color: var(--gold); }
 .info-box { display: flex; flex-direction: column; gap: 6px; align-items: stretch; width: 120px; }
 .info-box .stat { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .info-box small { font-size: 11px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
@@ -252,10 +284,10 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--gold); outl
 @media (max-width: 900px) {
   #panel { grid-template-columns: 1fr; gap: 8px; }
   .panel-mine { grid-template-columns: 1fr auto; grid-template-areas: "meter meter" "club aim"; }
+  .aim-btns { flex-direction: row; }
   .meter-box { grid-area: meter; height: 104px; }
   .club-box { grid-area: club; }
-  .aim-box { grid-area: aim; flex-direction: row; }
-  .aim-box > span { display: none; }
+  .aim-box { grid-area: aim; }
   .info-box { flex-direction: row; width: auto; justify-content: space-between; align-items: center; }
   .panel-wait { min-height: 70px; }
   #hud { flex-wrap: wrap; row-gap: 6px; }

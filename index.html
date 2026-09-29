@@ -58,8 +58,11 @@
       <canvas id="meter"></canvas>
     </div>
     <div class="aim-box">
-      <span>Fine aim</span>
-      <div>
+      <div class="spin-col">
+        <div id="spinBall" class="spin-ball" role="slider" aria-label="Spin: tap the ball where you want to strike it"><i id="spinDot"></i></div>
+        <span id="spinLabel" class="spin-label">No spin</span>
+      </div>
+      <div class="aim-btns">
         <button id="aimLeft" class="icon-btn" aria-label="Aim left"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg></button>
         <button id="aimRight" class="icon-btn" aria-label="Aim right"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg></button>
       </div>
@@ -220,6 +223,10 @@
       <div>
         <h3>Trees and shot shape</h3>
         <p>When trees are near your line, the side view shows the ball's flight at the power you're swinging (and faintly at 100%, 75% and 50%). Red means it hits a tree. Tap <b>Shot</b> to switch between Normal, Punch (stays under the branches and runs out) and High (climbs over trouble, shorter and harder to time). Tap <b>Side</b> to keep the view open.</p>
+      </div>
+      <div>
+        <h3>Spin</h3>
+        <p>Tap or drag on the little ball where you want to strike it. Low is backspin: the ball stops quickly, and a wedge onto a green can zip back. High is topspin: lower flight, more roll. Left or right curves the ball (a draw or a fade), and the aim line bends to show it. Spin makes the timing window a little tighter. Double-tap the ball to clear it.</p>
       </div>
       <div>
         <h3>Wind and lie</h3>

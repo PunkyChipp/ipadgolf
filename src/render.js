@@ -366,31 +366,45 @@ export class Renderer {
     const { x, y, dir, len, ticks, ring, color } = aim;
     const dx = Math.cos(dir), dy = Math.sin(dir);
     const px = 1 / scale;
+    // The guide is a straight line, or the curved path when side spin is on.
+    const pts = aim.path || [[x, y, 0], [x + dx * len, y + dy * len, 1]];
+    const trace = () => {
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    };
+    const at = (f) => {
+      for (let i = 1; i < pts.length; i++) {
+        if (pts[i][2] >= f) {
+          const a = pts[i - 1], b = pts[i];
+          const k = (f - a[2]) / (b[2] - a[2] || 1);
+          return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k];
+        }
+      }
+      return [pts[pts.length - 1][0], pts[pts.length - 1][1]];
+    };
     ctx.save();
     ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
     ctx.strokeStyle = 'rgba(0,0,0,0.25)';
     ctx.lineWidth = 4 * px;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + dx * len, y + dy * len);
+    trace();
     ctx.stroke();
     ctx.setLineDash([8 * px, 7 * px]);
     ctx.strokeStyle = color || 'rgba(255,255,255,0.9)';
     ctx.lineWidth = 2 * px;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + dx * len, y + dy * len);
+    trace();
     ctx.stroke();
     ctx.setLineDash([]);
     for (const t of ticks || []) {
-      const tx = x + dx * len * t, ty = y + dy * len * t;
+      const [tx, ty] = at(t);
       ctx.beginPath();
       ctx.moveTo(tx - dy * 6 * px, ty + dx * 6 * px);
       ctx.lineTo(tx + dy * 6 * px, ty - dx * 6 * px);
       ctx.stroke();
     }
     if (ring) {
-      const ex = x + dx * len, ey = y + dy * len;
+      const [ex, ey] = at(1);
       const rr = Math.max(ring, 9 * px);
       ctx.fillStyle = 'rgba(255,255,255,0.14)';
       ctx.beginPath();
