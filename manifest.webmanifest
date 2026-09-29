@@ -1,7 +1,7 @@
 {
-  "name": "Pocket Putt",
-  "short_name": "Pocket Putt",
-  "description": "Nine holes of touch-friendly mini golf.",
+  "name": "Pocket Links",
+  "short_name": "Pocket Links",
+  "description": "A nine-hole golf game with two-player online play.",
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",
