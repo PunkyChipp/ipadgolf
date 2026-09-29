@@ -1,15 +1,18 @@
 // Network-first cache so the game still opens offline once it has been played,
 // while updates show up as soon as there is a connection.
-const CACHE = 'pocket-putt-v1';
+const CACHE = 'pocket-links-v2';
 const ASSETS = [
   './',
   'index.html',
   'styles.css',
   'manifest.webmanifest',
   'src/game.js',
-  'src/physics.js',
-  'src/levels.js',
+  'src/course.js',
+  'src/sim.js',
+  'src/render.js',
+  'src/net.js',
   'src/audio.js',
+  'src/vendor/mqtt.min.js',
   'icons/icon.svg',
   'icons/apple-touch-icon.png',
 ];

@@ -1,51 +1,73 @@
-# Pocket Putt
+# Pocket Links
 
-A 9-hole mini golf game for the browser, built for iPad touch screens. No build step and no dependencies: plain HTML, CSS and JavaScript modules.
+A nine-hole golf game for the browser, built for iPad. It has real clubs, wind, lies, sloping greens and a three-tap swing meter that is hard to master. You can play alone, with two players on one iPad, or on two iPads over the internet.
+
+No build step and no dependencies: plain HTML, CSS and JavaScript modules.
 
 ## How to play
 
-- Touch anywhere on the screen and **pull back**. The dotted line shows where the ball will go, including one bounce off a wall.
-- Pull further for more power, then let go to putt. Let go near where you started to cancel.
-- Water costs a stroke and puts the ball back where you hit it from. After 10 strokes the hole ends.
+- **Aim:** drag on the course. The dotted line and ring show where a full swing carries with no wind. The arrow buttons give fine aim.
+- **Swing:** three taps on the meter.
+  1. Tap to start.
+  2. Tap to set power. The numbers are yards; past 100% is extra distance with a tighter timing window.
+  3. Tap on the white line as the marker comes back. Early fades or slices right, late draws or hooks left. Miss badly and you shank or duff it.
+- **Wind** (arrow at the top, and the flag) pushes the ball sideways and changes carry.
+- **Lies:** rough, deep rough and bunkers cost distance and shrink the timing window. Only wedges play well from sand. The driver can only be hit from the tee or the fairway.
+- **Putting:** on the green, the moving dashes flow downhill. Two taps: start, then set the pace (the meter shows feet). Use "Change range" for long putts.
+- **Penalties:** water is one stroke and a drop behind the hazard. Out of bounds (past the white stakes) is one stroke and a replay from the same spot. A hole ends at par + 5.
 
-## The holes
+## The course (par 36)
 
-| # | Hole | Par | What's on it |
-|---|------|-----|--------------|
-| 1 | Opening Drive | 2 | A straight warm-up |
-| 2 | Dogleg Right | 3 | Bank it round the corner |
-| 3 | Bunker Hill | 3 | Sand traps and a block in the middle |
-| 4 | The Windmill | 3 | Time your shot through the spinning blades |
-| 5 | Lake Crossing | 3 | A narrow diagonal bridge over water |
-| 6 | Pinball Wizard | 3 | Bumpers that fire the ball back out |
-| 7 | The Volcano | 3 | The hole sits on top of a hill |
-| 8 | Wormhole | 2 | Portals and a sliding block |
-| 9 | Grand Finale | 4 | A bit of everything |
+| # | Hole | Par | Notes |
+|---|------|-----|-------|
+| 1 | The Opener | 4 | Gentle start, bunker at driving distance |
+| 2 | Carry the Pond | 3 | All carry over water |
+| 3 | The Long Road | 5 | Dogleg left; trees guard the corner |
+| 4 | Creek Crossing | 4 | A creek crosses right where a big drive lands |
+| 5 | Fortress | 3 | Green ringed by four bunkers |
+| 6 | The Chute | 4 | Narrow, tree-lined fairway |
+| 7 | Lakeside | 5 | A lake runs down the left side |
+| 8 | The Island | 3 | Island green |
+| 9 | Homeward | 5 | Pond in front of the green |
+
+Pin positions and wind change every game.
+
+## Two players
+
+- **One iPad:** take turns; the game asks you to pass the iPad when the player changes.
+- **Two iPads:** one player taps *Create game* and reads out the 4-letter code; the other enters it and taps *Join game*. The iPads can be on different Wi-Fi networks or on mobile data; they just need internet. If an iPad reloads or drops out, tap *Rejoin online game* on the title screen.
+
+Normal golf order applies: whoever is furthest from the hole plays next, and the lowest score on the last hole tees off first.
+
+Online play relays small messages through free public MQTT servers (HiveMQ and EMQX, both at once for reliability) using a topic named after the game code. There's no account and no server of our own. Anyone who knew your code could see the shots, which is fine for a golf game.
 
 ## Putting it on your iPad
 
-The game needs to be served over the web. The simplest free option is GitHub Pages:
+The game needs to be served over the web. GitHub Pages is free:
 
 1. On GitHub, open this repo's **Settings → Pages**.
 2. Under "Build and deployment", choose **Deploy from a branch**, pick `main` and `/ (root)`, and save.
-3. After a minute the game is live at `https://<your-username>.github.io/<repo-name>/`.
-4. Open that link in Safari on the iPad, tap **Share → Add to Home Screen**. It then opens full screen like an app and keeps working offline.
+3. After a minute the game is at `https://<your-username>.github.io/<repo-name>/`.
+4. Open that link in Safari on each iPad and tap **Share → Add to Home Screen**. It then opens full screen like an app. Solo and same-iPad play also work offline after the first visit.
 
-If there's no sound, check the iPad's silent mode is off.
+If there's no sound, check the iPad's silent switch or mode.
 
 ## Running it locally
 
 ```sh
 npm start        # serves on http://localhost:8000 (uses python3)
-npm test         # checks every hole can be finished at or under par
+npm test         # a bot plays every hole: checks the course is fair and shots are deterministic
 ```
 
-Opening `index.html` directly from the file system won't work, because browsers block JavaScript modules on `file://` URLs.
+Opening `index.html` straight from the file system won't work, because browsers block JavaScript modules on `file://` URLs. To test online play without the public servers, run any MQTT broker with WebSockets and add `?broker=ws://localhost:PORT` to the URL.
 
 ## Code layout
 
-- `src/physics.js` – ball movement, collisions, hazards. No browser code, so the tests can run it in Node.
-- `src/levels.js` – the hole layouts and colour themes. Add a hole by adding an entry to `LEVELS`.
-- `src/game.js` – drawing, touch controls, scoring and menus.
-- `src/audio.js` – sound effects, generated in code (no audio files).
-- `test/solve.mjs` – tries thousands of shots on each hole to prove it can be finished within par.
+- `src/course.js`: the nine holes and terrain (fairway, rough, bunkers, water, trees, green slopes). No browser code.
+- `src/sim.js`: clubs, ball flight, wind, spin, bounces, roll and putting. Deterministic, so both iPads replay a shot identically.
+- `src/render.js`: draws the course, balls, flag and effects through a rotating, zooming camera.
+- `src/game.js`: turns, the swing meter, scoring, menus and saving.
+- `src/net.js`: the online link.
+- `src/audio.js`: sound effects, generated in code.
+- `src/vendor/mqtt.min.js`: [MQTT.js](https://github.com/mqttjs/MQTT.js) 5.16.0 (MIT licence, see `mqtt.LICENSE.md`).
+- `test/play.mjs`: plays every hole with a bot.

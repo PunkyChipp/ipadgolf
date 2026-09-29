@@ -1,16 +1,21 @@
-import { World, BALL_R, HOLE_R, PORTAL_R, pointInPoly, distToPoly } from './physics.js';
-import { LEVELS, THEMES } from './levels.js';
+import { buildHole, windFor, HOLES, T, TERRAIN_NAMES } from './course.js';
+import {
+  simulateShot, CLUBS, PUTTER, PUTT_SCALES, meterWindow, lieEffect, suggestClub, suggestPuttScale, shotSeed, shotLabel,
+} from './sim.js';
+import { Renderer } from './render.js';
 import { Sound } from './audio.js';
+import { Link, makeCode, cleanCode } from './net.js';
 
 const $ = (s) => document.querySelector(s);
 const TAU = Math.PI * 2;
-const MAX_STROKES = 10;
-const FONT = '"Lilita One", ui-rounded, "SF Pro Rounded", system-ui, sans-serif';
+const COLORS = ['#e8433a', '#2f7de1'];
+const METER_MIN = -0.15;
+const METER_MAX = 1.1;
 
 const store = {
   get(k, d) {
     try {
-      const v = localStorage.getItem('pocketputt.' + k);
+      const v = localStorage.getItem('pocketlinks.' + k);
       return v == null ? d : JSON.parse(v);
     } catch {
       return d;
@@ -18,1406 +23,1235 @@ const store = {
   },
   set(k, v) {
     try {
-      if (v == null) localStorage.removeItem('pocketputt.' + k);
-      else localStorage.setItem('pocketputt.' + k, JSON.stringify(v));
+      if (v == null) localStorage.removeItem('pocketlinks.' + k);
+      else localStorage.setItem('pocketlinks.' + k, JSON.stringify(v));
     } catch {}
   },
 };
 
-const canvas = $('#game');
-const ctx = canvas.getContext('2d');
+const R = new Renderer($('#game'));
 const sound = new Sound(store.get('muted', false));
+const meterCv = $('#meter');
+const mctx = meterCv.getContext('2d');
 
-const S = {
-  mode: 'title', // title | play | card | paused | final | practice
-  practice: false,
-  hole: 0,
-  strokes: 0,
-  scores: [],
-  world: null,
-  view: null,
-  layer: null,
-  aim: null,
-  trail: [],
-  particles: [],
-  confetti: [],
+// ---------- shared game state (plain data, sent between devices) ----------
+
+let G = null; // the game
+let hole = null; // built hole for G
+let wind = null;
+
+function newGame(mode, names, holes, seed = (Math.random() * 2 ** 31) >>> 0) {
+  const g = { v: 1, mode, seed, holes, h: 0, n: 0, turn: 0, order: names.map((_, i) => i), done: false, last: null,
+    players: names.map((name) => ({ name, scores: [], strokes: 0, ball: null, holed: false, picked: false })) };
+  startHole(g);
+  return g;
+}
+
+function startHole(g) {
+  const hl = buildHole(g.holes[g.h], g.seed);
+  const t = hl.tee;
+  g.players.forEach((p, i) => {
+    const off = g.players.length > 1 ? (i === 0 ? -1.6 : 1.6) : 0;
+    p.ball = { x: t.x + Math.cos(t.ang + Math.PI / 2) * off, y: t.y + Math.sin(t.ang + Math.PI / 2) * off, lie: T.TEE };
+    p.strokes = 0;
+    p.holed = false;
+    p.picked = false;
+  });
+  g.turn = g.order[0];
+}
+
+function toPin(hl, ball) {
+  return Math.hypot(hl.pin.x - ball.x, hl.pin.y - ball.y);
+}
+
+// Apply a finished shot to a copy of the game and return it.
+function applyShot(g0, hl, p, res) {
+  const g = JSON.parse(JSON.stringify(g0));
+  const pl = g.players[p];
+  pl.strokes += 1 + res.penalty;
+  pl.ball = res.final;
+  if (res.outcome === 'holed') pl.holed = true;
+  else if (pl.strokes >= hl.par + 5) {
+    pl.holed = true;
+    pl.picked = true;
+    pl.strokes = hl.par + 5;
+  }
+  g.n++;
+  const left = g.players.map((x, i) => i).filter((i) => !g.players[i].holed);
+  if (!left.length) {
+    // Hole finished: record scores, set the honour for the next tee.
+    const results = g.players.map((x) => x.strokes);
+    g.players.forEach((x) => x.scores.push(x.strokes));
+    g.last = { h: g.h, hole: g.holes[g.h], results, picked: g.players.map((x) => x.picked) };
+    g.order = [...g.order].sort((a, b) => results[a] - results[b]);
+    g.h++;
+    if (g.h >= g.holes.length) g.done = true;
+    else startHole(g);
+    return g;
+  }
+  // Furthest from the hole plays next; ties go to the honour order.
+  left.sort((a, b) => toPin(hl, g.players[b].ball) - toPin(hl, g.players[a].ball) || g.order.indexOf(a) - g.order.indexOf(b));
+  g.turn = left[0];
+  return g;
+}
+
+// ---------- device/UI state ----------
+
+const U = {
+  screen: 'title',
+  phase: 'idle', // intro | aim | wait | flight | pass
+  local: [0], // player indices this device controls
+  online: null, // { link, role, code, peerSeen, peerName }
+  club: 0,
+  aim: 0,
+  puttScale: 10,
+  swing: { phase: 'idle' },
+  anim: null,
+  queue: [],
+  cam: { x: 0, y: 0, rot: 0, scale: 2 },
+  camT: null,
+  mapView: false,
+  dragging: null,
+  introT: 0,
   popups: [],
-  fireflies: [],
-  hidden: 0,
-  sinkT: 0,
-  finishing: false,
-  token: 0, // bumps whenever a hole (re)loads so stale timers are ignored
-  demoT: 0,
-  demoShots: 0,
   time: 0,
+  lastPlayer: -1,
 };
 
-/* ---------- helpers ---------- */
+// ---------- helpers ----------
 
-function rng(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+function relPar(pl, g) {
+  let d = 0;
+  pl.scores.forEach((s, i) => (d += s - HOLES[g.holes[i]].par));
+  return d;
 }
+const fmtRel = (n) => (n === 0 ? 'E' : n > 0 ? `+${n}` : `−${-n}`);
 
-function hash(str) {
-  let h = 2166136261;
-  for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619);
-  return h >>> 0;
-}
-
-function pathPoly(c, poly) {
-  c.beginPath();
-  c.moveTo(poly[0][0], poly[0][1]);
-  for (let i = 1; i < poly.length; i++) c.lineTo(poly[i][0], poly[i][1]);
-  c.closePath();
-}
-
-function circle(c, x, y, r) {
-  c.beginPath();
-  c.arc(x, y, r, 0, TAU);
-}
-
-function bounds(poly) {
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (const [x, y] of poly) {
-    x0 = Math.min(x0, x); y0 = Math.min(y0, y);
-    x1 = Math.max(x1, x); y1 = Math.max(y1, y);
-  }
-  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-}
-
-function setM(c, m) {
-  c.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
-}
-
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const lerp = (a, b, t) => a + (b - a) * t;
-const par = (i) => LEVELS[i].par;
-
-function relScore(n) {
-  return n === 0 ? 'E' : n > 0 ? `+${n}` : `−${-n}`;
-}
-
-function scoreTerm(strokes, p) {
+function scoreName(strokes, par) {
   if (strokes === 1) return 'Hole in One!';
-  const d = strokes - p;
-  const names = { '-3': 'Albatross!', '-2': 'Eagle!', '-1': 'Birdie!', 0: 'Par', 1: 'Bogey', 2: 'Double Bogey', 3: 'Triple Bogey' };
-  return names[d] ?? (d < 0 ? 'Condor!' : `${d} Over`);
+  const d = strokes - par;
+  return { '-3': 'Albatross!', '-2': 'Eagle!', '-1': 'Birdie!', 0: 'Par', 1: 'Bogey', 2: 'Double Bogey', 3: 'Triple Bogey' }[d] ?? (d < 0 ? 'Condor!' : `+${d}`);
 }
 
-/* ---------- view / layout ---------- */
-
-function hudBottom() {
-  const hud = $('#hud');
-  if (hud.hidden) return 12;
-  return hud.getBoundingClientRect().bottom + 6;
+function isLocal(p) {
+  return U.local.includes(p);
 }
 
-function buildView() {
+function currentBall() {
+  return G.players[G.turn].ball;
+}
+
+function clubCarry(ci, lie) {
+  const c = CLUBS[ci];
+  return c.putter ? U.puttScale : c.carry * lieEffect(lie, ci).dist;
+}
+
+function save() {
+  if (!G) return;
+  if (G.mode === 'solo') store.set('solo', G.done ? null : G);
+  if (G.mode === 'online' && U.online) store.set('online', G.done ? null : { code: U.online.code, role: U.online.role, game: G });
+}
+
+// ---------- layout / camera ----------
+
+function viewport() {
   const w = window.innerWidth, h = window.innerHeight;
+  const top = $('#hud').hidden ? 0 : $('#hud').getBoundingClientRect().bottom;
+  const bot = $('#panel').hidden ? h : $('#panel').getBoundingClientRect().top;
+  return { w, h, top, bot, sx: w / 2, sy: top + (bot - top) / 2, vw: w, vh: Math.max(120, bot - top) };
+}
+
+function resize() {
+  R.resize(window.innerWidth, window.innerHeight, Math.min(window.devicePixelRatio || 1, 2));
+  const r = meterCv.getBoundingClientRect();
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.width = Math.round(w * dpr);
-  canvas.height = Math.round(h * dpr);
-  canvas.style.width = w + 'px';
-  canvas.style.height = h + 'px';
-
-  const L = S.world.level;
-  const b = bounds(L.course);
-  const pad = 30;
-  const top = S.mode === 'title' ? 12 : hudBottom();
-  const availW = w - 24, availH = h - top - 16;
-  const bw = b.w + pad * 2, bh = b.h + pad * 2;
-  const s0 = Math.min(availW / bw, availH / bh);
-  const s90 = Math.min(availW / bh, availH / bw);
-  const rot = s90 > s0 * 1.08 ? 90 : 0;
-  const scale = rot ? s90 : s0;
-  const m = new DOMMatrix()
-    .translate(w / 2, top + availH / 2)
-    .rotate(rot)
-    .scale(scale)
-    .translate(-(b.x + b.w / 2), -(b.y + b.h / 2));
-  const inv = m.inverse();
-  // A screen-space "down-right" direction expressed in world units, for shadows.
-  const shx = inv.a * 0.6 + inv.c * 0.8, shy = inv.b * 0.6 + inv.d * 0.8;
-  const shl = Math.hypot(shx, shy) || 1;
-  S.view = { w, h, dpr, m, inv, scale, rot, wm: new DOMMatrix().scale(dpr).multiply(m), sh: { x: shx / shl, y: shy / shl } };
-  buildLayer();
-  initFireflies();
+  meterCv.width = Math.round(r.width * dpr);
+  meterCv.height = Math.round(r.height * dpr);
 }
 
-function toScreen(x, y) {
-  const p = S.view.m.transformPoint(new DOMPoint(x, y));
-  return [p.x, p.y];
-}
-
-function visibleWorld(margin) {
-  const { inv, w, h } = S.view;
-  const pts = [[0, 0], [w, 0], [0, h], [w, h]].map(([x, y]) => inv.transformPoint(new DOMPoint(x, y)));
-  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
-  const x0 = Math.min(...xs) - margin, y0 = Math.min(...ys) - margin;
-  return { x: x0, y: y0, w: Math.max(...xs) + margin - x0, h: Math.max(...ys) + margin - y0 };
-}
-
-/* ---------- static layer (drawn once per hole / resize) ---------- */
-
-function buildLayer() {
-  const { w, h, dpr, wm } = S.view;
-  const cv = S.layer || document.createElement('canvas');
-  cv.width = Math.round(w * dpr);
-  cv.height = Math.round(h * dpr);
-  const c = cv.getContext('2d');
-  setM(c, wm);
-  const L = S.world.level;
-  const T = THEMES[L.theme] || THEMES.meadow;
-  drawRough(c, L, T);
-  drawCourse(c, L, T);
-  S.layer = cv;
-}
-
-function drawRough(c, L, T) {
-  const vis = visibleWorld(80);
-  const sh = S.view.sh;
-  c.fillStyle = T.rough;
-  c.fillRect(vis.x, vis.y, vis.w, vis.h);
-  const r = rng(hash(L.name));
-  const R = { x: -1200, y: -1000, w: 3400, h: 2700 }; // fixed area keeps the scenery identical across resizes
-  for (let i = 0; i < 260; i++) {
-    const x = R.x + r() * R.w, y = R.y + r() * R.h, rad = 30 + r() * 110;
-    c.fillStyle = r() < 0.5 ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.05)';
-    circle(c, x, y, rad);
-    c.fill();
+function mapTarget() {
+  const P = hole.path;
+  const a = Math.atan2(P[P.length - 1].y - P[0].y, P[P.length - 1].x - P[0].x);
+  const rot = -Math.PI / 2 - a;
+  const c = Math.cos(rot), s = Math.sin(rot);
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const p of P) {
+    const u = p.x * c - p.y * s, v = p.x * s + p.y * c;
+    x0 = Math.min(x0, u); x1 = Math.max(x1, u); y0 = Math.min(y0, v); y1 = Math.max(y1, v);
   }
-  c.lineCap = 'round';
-  c.lineWidth = 1.6;
-  for (let i = 0; i < 4200; i++) {
-    const x = R.x + r() * R.w, y = R.y + r() * R.h;
-    const light = r() < 0.5;
-    if (x < vis.x || y < vis.y || x > vis.x + vis.w || y > vis.y + vis.h) continue;
-    c.strokeStyle = light ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.09)';
-    c.beginPath();
-    c.moveTo(x, y);
-    c.lineTo(x + 2, y - 5);
-    c.stroke();
-  }
+  const vp = viewport();
+  const scale = Math.min(vp.vw / (x1 - x0 + 90), vp.vh / (y1 - y0 + 50));
+  const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+  // back-rotate the midpoint into world space
+  return { x: mx * c + my * s, y: -mx * s + my * c, rot, scale };
+}
 
-  const trees = [];
-  const step = 64;
-  for (let gx = R.x; gx < R.x + R.w; gx += step) {
-    for (let gy = R.y; gy < R.y + R.h; gy += step) {
-      const x = gx + r() * step, y = gy + r() * step, rad = 20 + r() * 20;
-      const pal = T.trees[Math.floor(r() * T.trees.length)];
-      const skip = r() < 0.3;
-      const flowers = r() < 0.15;
-      const seed = r() * TAU;
-      if (skip) continue;
-      if (x < vis.x - 60 || y < vis.y - 60 || x > vis.x + vis.w + 60 || y > vis.y + vis.h + 60) continue;
-      if (pointInPoly(x, y, L.course) || distToPoly(x, y, L.course) < rad + 20) continue;
-      trees.push({ x, y, rad, pal, flowers, seed });
+function aimTarget(ball, dir, span, lateral) {
+  const vp = viewport();
+  const rot = -Math.PI / 2 - dir;
+  const scale = Math.max(0.8, Math.min(70, Math.min(vp.vh / (span * 1.28 + 6), vp.vw / Math.max(lateral, 12))));
+  const fwd = span * 0.44;
+  return { x: ball.x + Math.cos(dir) * fwd, y: ball.y + Math.sin(dir) * fwd, rot, scale };
+}
+
+function cameraTarget() {
+  if (U.mapView || U.phase === 'intro') return mapTarget();
+  const p = G.players[G.turn];
+  const ball = p.ball;
+  if (U.phase === 'flight' && U.anim) {
+    const f = U.anim.res.frames[Math.min(U.anim.i, U.anim.res.frames.length - 1)];
+    const base = U.anim.view;
+    return { x: base.x + (f.x - base.bx) * 0.9, y: base.y + (f.y - base.by) * 0.9, rot: base.rot, scale: base.scale };
+  }
+  const dist = toPin(hole, ball);
+  if (U.phase === 'aim' || U.phase === 'pass') {
+    const dir = U.dragging ? U.dragging.camDir : U.aim;
+    const len = CLUBS[U.club].putter ? Math.max(U.puttScale, dist) : clubCarry(U.club, ball.lie) * 1.05;
+    const span = Math.max(len, CLUBS[U.club].putter ? 5 : 20);
+    return aimTarget(ball, dir, span, span * 0.62 + 14);
+  }
+  // Watching someone else: look from their ball toward the pin.
+  const dir = Math.atan2(hole.pin.y - ball.y, hole.pin.x - ball.x);
+  const span = Math.min(dist, ball.lie === T.GREEN ? Math.max(dist, 5) : 260);
+  return aimTarget(ball, dir, Math.max(span, 6), Math.max(span, 6) * 0.62 + 14);
+}
+
+function angDiff(a, b) {
+  let d = (b - a) % TAU;
+  if (d > Math.PI) d -= TAU;
+  if (d < -Math.PI) d += TAU;
+  return d;
+}
+
+function updateCamera(dt, snap = false) {
+  const t = cameraTarget();
+  const k = snap ? 1 : 1 - Math.exp(-dt * (U.phase === 'flight' ? 5 : 3.2));
+  const c = U.cam;
+  c.x += (t.x - c.x) * k;
+  c.y += (t.y - c.y) * k;
+  c.rot += angDiff(c.rot, t.rot) * k;
+  c.scale *= Math.exp(Math.log(t.scale / c.scale) * k);
+}
+
+function view() {
+  const vp = viewport();
+  return { ...U.cam, sx: vp.sx, sy: vp.sy };
+}
+
+// ---------- turn flow ----------
+
+function loadHoleView() {
+  hole = buildHole(G.holes[G.h], G.seed);
+  wind = windFor(G.holes[G.h], G.seed);
+  R.setHole(hole);
+  updateHud();
+}
+
+function beginHole() {
+  loadHoleView();
+  U.phase = 'intro';
+  U.introT = 1.9;
+  U.mapView = false;
+  const b = $('#banner');
+  b.innerHTML = `<small>Hole ${G.h + 1} of ${G.holes.length}</small><strong></strong><span>Par ${hole.par} · ${hole.yards} yards · Wind ${wind.speed} mph</span>`;
+  b.querySelector('strong').textContent = hole.name;
+  b.classList.remove('show');
+  void b.offsetWidth;
+  b.classList.add('show');
+  updateCamera(0, true);
+  updatePanel();
+}
+
+function enterTurn() {
+  const p = G.turn;
+  const pl = G.players[p];
+  U.swing = { phase: 'idle' };
+  U.mapView = false;
+  if (isLocal(p)) {
+    const ball = pl.ball;
+    const dist = toPin(hole, ball);
+    U.club = suggestClub(dist, ball.lie);
+    U.puttScale = suggestPuttScale(dist);
+    U.aim = defaultAim(ball, U.club);
+    const needPass = G.mode === 'hotseat' && U.lastPlayer !== -1 && U.lastPlayer !== p;
+    U.phase = needPass ? 'pass' : 'aim';
+    if (needPass) {
+      $('#passName').textContent = pl.name;
+      $('#passName').style.color = COLORS[p];
+      $('#pass').hidden = false;
     }
-  }
-  c.fillStyle = 'rgba(0,0,0,0.25)';
-  for (const t of trees) {
-    circle(c, t.x + sh.x * t.rad * 0.45, t.y + sh.y * t.rad * 0.45, t.rad * 1.02);
-    c.fill();
-  }
-  trees.sort((a, b) => a.y - b.y);
-  for (const t of trees) drawTree(c, t, sh);
-}
-
-function drawTree(c, t, sh) {
-  const [dark, mid, light] = t.pal;
-  c.fillStyle = dark;
-  for (let k = 0; k < 6; k++) {
-    const a = t.seed + (k * TAU) / 6;
-    circle(c, t.x + Math.cos(a) * t.rad * 0.42, t.y + Math.sin(a) * t.rad * 0.42, t.rad * 0.6);
-    c.fill();
-  }
-  c.fillStyle = mid;
-  for (let k = 0; k < 4; k++) {
-    const a = t.seed + (k * TAU) / 4;
-    circle(c, t.x - sh.x * t.rad * 0.15 + Math.cos(a) * t.rad * 0.3, t.y - sh.y * t.rad * 0.15 + Math.sin(a) * t.rad * 0.3, t.rad * 0.45);
-    c.fill();
-  }
-  c.fillStyle = light;
-  circle(c, t.x - sh.x * t.rad * 0.35, t.y - sh.y * t.rad * 0.35, t.rad * 0.3);
-  c.fill();
-  if (t.flowers) {
-    const r = rng(Math.floor(t.seed * 1e6));
-    for (let k = 0; k < 7; k++) {
-      c.fillStyle = r() < 0.5 ? '#ffd6e6' : '#fff4c2';
-      circle(c, t.x + (r() - 0.5) * t.rad * 1.3, t.y + (r() - 0.5) * t.rad * 1.3, 2.2);
-      c.fill();
-    }
-  }
-}
-
-function drawCourse(c, L, T) {
-  const sh = S.view.sh;
-  const b = bounds(L.course);
-  c.lineJoin = 'round';
-
-  // Rail: stroked on the boundary; the grass later covers its inner half.
-  c.save();
-  c.translate(sh.x * 7, sh.y * 7);
-  pathPoly(c, L.course);
-  c.lineWidth = 30;
-  c.strokeStyle = 'rgba(0,0,0,0.3)';
-  c.stroke();
-  c.restore();
-  pathPoly(c, L.course);
-  c.lineWidth = 28;
-  c.strokeStyle = T.rail[0];
-  c.stroke();
-  c.lineWidth = 22;
-  c.strokeStyle = T.rail[1];
-  c.stroke();
-  c.lineWidth = 11;
-  c.strokeStyle = T.rail[2];
-  c.stroke();
-
-  c.save();
-  pathPoly(c, L.course);
-  c.clip();
-  c.fillStyle = T.grass[0];
-  c.fillRect(b.x - 10, b.y - 10, b.w + 20, b.h + 20);
-  // Mowing stripes
-  c.save();
-  c.translate(b.x + b.w / 2, b.y + b.h / 2);
-  c.rotate(-0.45);
-  c.fillStyle = T.grass[1];
-  const ext = Math.hypot(b.w, b.h);
-  for (let x = -ext; x < ext; x += 92) c.fillRect(x, -ext, 46, ext * 2);
-  c.restore();
-  const r = rng(hash(L.name) ^ 0x9e37);
-  for (let i = 0; i < (b.w * b.h) / 260; i++) {
-    c.fillStyle = r() < 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
-    c.fillRect(b.x + r() * b.w, b.y + r() * b.h, 1.6, 1.6);
-  }
-
-  for (const s of L.slopes || []) drawSlopeBase(c, s);
-  for (const s of L.sand || []) drawSand(c, s, r);
-  for (const w of L.water || []) drawWater(c, w);
-  drawTee(c, L);
-  drawCup(c, L);
-
-  // Soft inner shadow along the rails gives the course some depth.
-  pathPoly(c, L.course);
-  c.lineWidth = 22;
-  c.strokeStyle = 'rgba(0,0,0,0.07)';
-  c.stroke();
-  c.lineWidth = 10;
-  c.strokeStyle = 'rgba(0,0,0,0.12)';
-  c.stroke();
-  c.restore();
-
-  for (const w of L.walls || []) drawBlock(c, w, T, sh);
-}
-
-function drawSlopeBase(c, s) {
-  c.save();
-  if (s.poly) {
-    pathPoly(c, s.poly);
-    c.clip();
-    const b = bounds(s.poly);
-    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
-    const f = Math.hypot(...s.force), dx = s.force[0] / f, dy = s.force[1] / f;
-    const ext = Math.abs(dx) * b.w / 2 + Math.abs(dy) * b.h / 2;
-    const g = c.createLinearGradient(cx - dx * ext, cy - dy * ext, cx + dx * ext, cy + dy * ext);
-    g.addColorStop(0, 'rgba(255,255,255,0.14)');
-    g.addColorStop(1, 'rgba(0,0,0,0.16)');
-    c.fillStyle = g;
-    c.fillRect(b.x, b.y, b.w, b.h);
+    U.lastPlayer = p;
   } else {
-    const hill = s.strength > 0;
-    const g = c.createRadialGradient(s.x, s.y, s.r0, s.x, s.y, s.r1);
-    g.addColorStop(0, hill ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.18)');
-    g.addColorStop(0.7, hill ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.04)');
-    g.addColorStop(1, 'rgba(0,0,0,0)');
-    c.fillStyle = g;
-    circle(c, s.x, s.y, s.r1);
-    c.fill();
-    c.strokeStyle = 'rgba(255,255,255,0.18)';
-    c.lineWidth = 2;
-    circle(c, s.x, s.y, s.r0 + 4);
-    c.stroke();
+    U.phase = 'wait';
   }
-  c.restore();
-}
-
-function drawSand(c, poly, r) {
-  c.save();
-  pathPoly(c, poly);
-  c.lineWidth = 7;
-  c.strokeStyle = 'rgba(255,255,255,0.18)';
-  c.stroke();
-  c.fillStyle = '#e8d196';
-  c.fill();
-  c.clip();
-  const b = bounds(poly);
-  for (let i = 0; i < (b.w * b.h) / 40; i++) {
-    c.fillStyle = r() < 0.5 ? 'rgba(160,120,50,0.25)' : 'rgba(255,250,225,0.5)';
-    c.fillRect(b.x + r() * b.w, b.y + r() * b.h, 1.8, 1.8);
-  }
-  // rake lines
-  c.strokeStyle = 'rgba(160,120,50,0.18)';
-  c.lineWidth = 1.5;
-  for (let y = b.y + 6; y < b.y + b.h; y += 9) {
-    c.beginPath();
-    for (let x = b.x; x <= b.x + b.w; x += 8) c.lineTo(x, y + Math.sin(x * 0.05 + y) * 2.5);
-    c.stroke();
-  }
-  pathPoly(c, poly);
-  c.lineWidth = 9;
-  c.strokeStyle = 'rgba(120,85,30,0.35)';
-  c.stroke();
-  c.restore();
-}
-
-function drawWater(c, poly) {
-  const b = bounds(poly);
-  pathPoly(c, poly);
-  c.lineWidth = 12;
-  c.strokeStyle = 'rgba(25,60,20,0.45)';
-  c.stroke();
-  c.save();
-  pathPoly(c, poly);
-  c.clip();
-  const g = c.createLinearGradient(b.x, b.y, b.x + b.w * 0.4, b.y + b.h);
-  g.addColorStop(0, '#48b3ef');
-  g.addColorStop(1, '#1b65b0');
-  c.fillStyle = g;
-  c.fillRect(b.x, b.y, b.w, b.h);
-  pathPoly(c, poly);
-  c.lineWidth = 16;
-  c.strokeStyle = 'rgba(170,230,255,0.35)';
-  c.stroke();
-  c.restore();
-  pathPoly(c, poly);
-  c.lineWidth = 2.5;
-  c.strokeStyle = 'rgba(255,255,255,0.75)';
-  c.stroke();
-}
-
-function drawTee(c, L) {
-  const [tx, ty] = L.tee;
-  const dx = L.hole[0] - tx, dy = L.hole[1] - ty, d = Math.hypot(dx, dy);
-  const px = -dy / d, py = dx / d;
-  c.fillStyle = 'rgba(255,255,255,0.1)';
-  circle(c, tx, ty, 24);
-  c.fill();
-  c.setLineDash([4, 5]);
-  c.strokeStyle = 'rgba(255,255,255,0.35)';
-  c.lineWidth = 1.5;
-  circle(c, tx, ty, 24);
-  c.stroke();
-  c.setLineDash([]);
-  for (const k of [-1, 1]) {
-    const x = tx + px * 30 * k, y = ty + py * 30 * k;
-    c.fillStyle = 'rgba(0,0,0,0.25)';
-    circle(c, x + 1.5, y + 2, 5);
-    c.fill();
-    c.fillStyle = '#f2f0ea';
-    circle(c, x, y, 5);
-    c.fill();
-    c.fillStyle = '#e8433a';
-    circle(c, x, y, 2.4);
-    c.fill();
-  }
-}
-
-function drawCup(c, L) {
-  const [x, y] = L.hole;
-  const g = c.createRadialGradient(x, y, HOLE_R, x, y, 60);
-  g.addColorStop(0, 'rgba(255,255,255,0.12)');
-  g.addColorStop(1, 'rgba(255,255,255,0)');
-  c.fillStyle = g;
-  circle(c, x, y, 60);
-  c.fill();
-  c.fillStyle = '#0c140c';
-  circle(c, x, y, HOLE_R);
-  c.fill();
-  const ig = c.createRadialGradient(x + 3, y + 4, 1, x, y, HOLE_R);
-  ig.addColorStop(0, 'rgba(0,0,0,0.6)');
-  ig.addColorStop(0.7, 'rgba(40,50,40,0.4)');
-  ig.addColorStop(1, 'rgba(90,100,90,0.5)');
-  c.fillStyle = ig;
-  circle(c, x, y, HOLE_R - 0.5);
-  c.fill();
-  c.strokeStyle = 'rgba(255,255,255,0.85)';
-  c.lineWidth = 1.8;
-  circle(c, x, y, HOLE_R);
-  c.stroke();
-}
-
-function drawBlock(c, poly, T, sh, lift = 1) {
-  c.save();
-  c.translate(sh.x * 8 * lift, sh.y * 8 * lift);
-  pathPoly(c, poly);
-  c.fillStyle = 'rgba(0,0,0,0.3)';
-  c.fill();
-  c.restore();
-  c.save();
-  c.translate(sh.x * 3.5, sh.y * 3.5);
-  pathPoly(c, poly);
-  c.fillStyle = T.rail[0];
-  c.fill();
-  c.restore();
-  pathPoly(c, poly);
-  c.fillStyle = T.rail[1];
-  c.fill();
-  c.save();
-  c.clip();
-  c.lineWidth = 6;
-  c.strokeStyle = T.rail[2];
-  c.globalAlpha = 0.55;
-  c.stroke();
-  c.restore();
-}
-
-/* ---------- per-frame drawing ---------- */
-
-function render() {
-  const { dpr, wm } = S.view;
-  const W = S.world;
-  const L = W.level;
-  const T = THEMES[L.theme] || THEMES.meadow;
-  const t = S.time;
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.drawImage(S.layer, 0, 0);
-  setM(ctx, wm);
-
-  ctx.save();
-  pathPoly(ctx, L.course);
-  ctx.clip();
-  for (const w of L.water || []) drawWaterShimmer(w, t);
-  for (const s of L.slopes || []) drawSlopeAnim(s, t);
-  ctx.restore();
-
-  for (const p of W.portals) drawPortalPair(p, t);
-  for (const bp of W.bumpers) drawBumper(bp);
-  for (const m of W.movers) drawBlock(ctx, W.moverPoly(m), { rail: ['#34404c', '#5d6d7c', '#9fb0bf'] }, S.view.sh, 1.2);
-  drawTrail();
-  drawBall();
-  for (const s of W.spinners) drawSpinner(s);
-  drawAim();
-  drawParticles();
-  if (T.fireflies) drawFireflies(t);
-
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  drawFlag(t);
-  drawDragIndicator();
-  drawPopups();
-  drawConfetti();
-}
-
-function drawWaterShimmer(poly, t) {
-  const b = bounds(poly);
-  ctx.save();
-  pathPoly(ctx, poly);
-  ctx.clip();
-  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
-  ctx.lineWidth = 2;
-  ctx.lineCap = 'round';
-  ctx.setLineDash([14, 26]);
-  let k = 0;
-  for (let y = b.y + 10; y < b.y + b.h; y += 22, k++) {
-    ctx.lineDashOffset = -t * 18 - k * 13;
-    ctx.beginPath();
-    for (let x = b.x - 10; x <= b.x + b.w + 10; x += 10) ctx.lineTo(x, y + Math.sin(x * 0.035 + t * 1.6 + k) * 3.5);
-    ctx.stroke();
-  }
-  ctx.setLineDash([]);
-  ctx.restore();
-}
-
-function drawSlopeAnim(s, t) {
-  ctx.save();
-  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-  ctx.lineWidth = 3;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  if (s.poly) {
-    pathPoly(ctx, s.poly);
-    ctx.clip();
-    const b = bounds(s.poly);
-    const f = Math.hypot(...s.force), dx = s.force[0] / f, dy = s.force[1] / f;
-    const px = -dy, py = dx;
-    const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
-    const ext = Math.hypot(b.w, b.h) / 2 + 40;
-    const off = (t * 28) % 48;
-    for (let a = -ext; a < ext; a += 48) {
-      for (let q = -ext; q < ext; q += 60) {
-        const x = cx + dx * (a + off) + px * q, y = cy + dy * (a + off) + py * q;
-        ctx.beginPath();
-        ctx.moveTo(x - dx * 6 + px * 9, y - dy * 6 + py * 9);
-        ctx.lineTo(x + dx * 3, y + dy * 3);
-        ctx.lineTo(x - dx * 6 - px * 9, y - dy * 6 - py * 9);
-        ctx.stroke();
-      }
-    }
-  } else {
-    const span = s.r1 - s.r0;
-    for (let k = 0; k < 4; k++) {
-      const f = ((t * 0.25 + k / 4) % 1);
-      const rr = s.strength > 0 ? s.r0 + f * span : s.r1 - f * span;
-      ctx.globalAlpha = Math.sin(f * Math.PI) * 0.8;
-      circle(ctx, s.x, s.y, rr);
-      ctx.stroke();
-    }
-  }
-  ctx.restore();
-}
-
-const PORTAL_HUES = [285, 190, 30];
-
-function drawPortalPair(p, t) {
-  const hue = PORTAL_HUES[S.world.portals.indexOf(p) % PORTAL_HUES.length];
-  for (const [x, y] of [p.a, p.b]) {
-    const g = ctx.createRadialGradient(x, y, 2, x, y, PORTAL_R * 1.9);
-    g.addColorStop(0, `hsla(${hue},100%,70%,0.55)`);
-    g.addColorStop(1, `hsla(${hue},100%,60%,0)`);
-    ctx.fillStyle = g;
-    circle(ctx, x, y, PORTAL_R * 1.9);
-    ctx.fill();
-    const core = ctx.createRadialGradient(x, y, 0, x, y, PORTAL_R);
-    core.addColorStop(0, '#05010d');
-    core.addColorStop(0.75, `hsl(${hue},70%,18%)`);
-    core.addColorStop(1, `hsl(${hue},90%,45%)`);
-    ctx.fillStyle = core;
-    circle(ctx, x, y, PORTAL_R);
-    ctx.fill();
-    ctx.lineCap = 'round';
-    for (let i = 0; i < 3; i++) {
-      const a = t * 2.6 + (i * TAU) / 3;
-      ctx.strokeStyle = `hsl(${hue},100%,${72 - i * 6}%)`;
-      ctx.lineWidth = 3 - i * 0.5;
-      ctx.beginPath();
-      ctx.arc(x, y, PORTAL_R * (0.9 - i * 0.22), a, a + 1.6);
-      ctx.stroke();
-    }
-  }
-}
-
-function drawBumper(bp) {
-  const { sh } = S.view;
-  const k = 1 + bp.flash * 0.18;
-  const r = bp.r * k;
-  ctx.fillStyle = 'rgba(0,0,0,0.3)';
-  circle(ctx, bp.x + sh.x * 6, bp.y + sh.y * 6, bp.r);
-  ctx.fill();
-  if (bp.flash > 0) {
-    ctx.fillStyle = `rgba(255,120,140,${bp.flash * 0.45})`;
-    circle(ctx, bp.x, bp.y, r * 1.6);
-    ctx.fill();
-  }
-  ctx.fillStyle = '#b3172d';
-  circle(ctx, bp.x, bp.y, r);
-  ctx.fill();
-  ctx.lineWidth = 3.5;
-  ctx.strokeStyle = '#fff3f0';
-  circle(ctx, bp.x, bp.y, r - 4);
-  ctx.stroke();
-  const g = ctx.createRadialGradient(bp.x - sh.x * r * 0.3, bp.y - sh.y * r * 0.3, 1, bp.x, bp.y, r * 0.55);
-  g.addColorStop(0, bp.flash > 0.2 ? '#fff' : '#ff9aa6');
-  g.addColorStop(1, '#e8354d');
-  ctx.fillStyle = g;
-  circle(ctx, bp.x, bp.y, r * 0.55);
-  ctx.fill();
-}
-
-function drawSpinner(s) {
-  const { sh } = S.view;
-  const ends = S.world.bladeEnds(s);
-  ctx.lineCap = 'round';
-  ctx.strokeStyle = 'rgba(0,0,0,0.28)';
-  ctx.lineWidth = s.w;
-  for (const [ex, ey] of ends) {
-    ctx.beginPath();
-    ctx.moveTo(s.x + sh.x * 12, s.y + sh.y * 12);
-    ctx.lineTo(ex + sh.x * 12, ey + sh.y * 12);
-    ctx.stroke();
-  }
-  for (const [ex, ey] of ends) {
-    ctx.strokeStyle = '#6b4424';
-    ctx.lineWidth = s.w;
-    ctx.beginPath();
-    ctx.moveTo(s.x, s.y);
-    ctx.lineTo(ex, ey);
-    ctx.stroke();
-    // sail: cream panel along the outer two-thirds with lattice
-    const dx = (ex - s.x) / s.len, dy = (ey - s.y) / s.len;
-    const px = -dy, py = dx;
-    const a = s.len * 0.3, bEnd = s.len * 0.96, wdt = s.w * 0.95;
-    ctx.fillStyle = '#f3ead2';
-    ctx.beginPath();
-    ctx.moveTo(s.x + dx * a, s.y + dy * a);
-    ctx.lineTo(s.x + dx * bEnd, s.y + dy * bEnd);
-    ctx.lineTo(s.x + dx * bEnd + px * wdt, s.y + dy * bEnd + py * wdt);
-    ctx.lineTo(s.x + dx * a + px * wdt, s.y + dy * a + py * wdt);
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(107,68,36,0.7)';
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-    ctx.beginPath();
-    for (let q = a + 12; q < bEnd; q += 12) {
-      ctx.moveTo(s.x + dx * q, s.y + dy * q);
-      ctx.lineTo(s.x + dx * q + px * wdt, s.y + dy * q + py * wdt);
-    }
-    ctx.stroke();
-  }
-  ctx.fillStyle = '#4a2f18';
-  circle(ctx, s.x, s.y, s.w * 0.9);
-  ctx.fill();
-  ctx.fillStyle = '#c99a5b';
-  circle(ctx, s.x, s.y, s.w * 0.45);
-  ctx.fill();
-}
-
-function ballDrawPos() {
-  const W = S.world, b = W.ball;
-  if (!W.sunk) return { x: b.x, y: b.y, k: 1 };
-  const f = clamp(S.sinkT / 0.22, 0, 1);
-  return { x: lerp(W.sinkFrom.x, W.hole.x, f), y: lerp(W.sinkFrom.y, W.hole.y, f), k: 1 - 0.45 * f };
-}
-
-function drawTrail() {
-  const n = S.trail.length;
-  if (n < 2) return;
-  ctx.lineCap = 'round';
-  for (let i = 1; i < n; i++) {
-    const a = S.trail[i - 1], b = S.trail[i];
-    ctx.strokeStyle = `rgba(255,255,255,${(i / n) * 0.35})`;
-    ctx.lineWidth = BALL_R * 1.4 * (i / n);
-    ctx.beginPath();
-    ctx.moveTo(a[0], a[1]);
-    ctx.lineTo(b[0], b[1]);
-    ctx.stroke();
-  }
-}
-
-function drawBall() {
-  const W = S.world;
-  if (S.hidden > 0) return;
-  if (W.sunk && S.sinkT > 0.4) return;
-  const { sh } = S.view;
-  const { x, y, k } = ballDrawPos();
-  const r = BALL_R * k;
-  if (!W.sunk) {
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    circle(ctx, x + sh.x * 3.5, y + sh.y * 3.5, r);
-    ctx.fill();
-  }
-  // "your turn" pulse
-  if (S.mode === 'play' && W.canShoot() && !S.aim) {
-    const p = (S.time * 1.2) % 1;
-    ctx.strokeStyle = `rgba(255,255,255,${0.5 * (1 - p)})`;
-    ctx.lineWidth = 2;
-    circle(ctx, x, y, r + 4 + p * 14);
-    ctx.stroke();
-  }
-  const g = ctx.createRadialGradient(x - sh.x * r * 0.4, y - sh.y * r * 0.4, r * 0.1, x, y, r);
-  g.addColorStop(0, '#ffffff');
-  g.addColorStop(0.6, '#eef1f2');
-  g.addColorStop(1, '#b7c0c5');
-  ctx.fillStyle = g;
-  circle(ctx, x, y, r);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
-  ctx.lineWidth = 0.8;
-  ctx.stroke();
-}
-
-function aimInfo() {
-  const a = S.aim;
-  if (!a) return null;
-  const dx = a.x0 - a.x, dy = a.y0 - a.y;
-  const len = Math.hypot(dx, dy);
-  const { inv, w, h } = S.view;
-  const maxDrag = clamp(Math.min(w, h) * 0.32, 150, 280);
-  const power = clamp(len / maxDrag, 0, 1);
-  const wx = inv.a * dx + inv.c * dy, wy = inv.b * dx + inv.d * dy;
-  return { power, angle: Math.atan2(wy, wx), len };
-}
-
-function powerColor(p, a = 1) {
-  return `hsla(${130 - p * 125}, 90%, ${58 - p * 6}%, ${a})`;
-}
-
-function drawAim() {
-  const info = aimInfo();
-  if (!info || info.power < 0.03) return;
-  const W = S.world, b = W.ball;
-  const { power, angle } = info;
-  const pts = W.aimPath(angle, 70 + power * 380);
-
-  // dotted guide along the predicted path
-  let acc = 0, total = 0;
-  for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
-  const gap = 15;
-  let next = BALL_R + 8;
-  for (let i = 1; i < pts.length; i++) {
-    const [x0, y0] = pts[i - 1], [x1, y1] = pts[i];
-    const seg = Math.hypot(x1 - x0, y1 - y0);
-    while (next <= acc + seg) {
-      const f = (next - acc) / seg;
-      const k = 1 - next / (total + 1);
-      ctx.fillStyle = powerColor(power, 0.25 + k * 0.75);
-      circle(ctx, lerp(x0, x1, f), lerp(y0, y1, f), 2 + k * 2.6);
-      ctx.fill();
-      next += gap;
-    }
-    acc += seg;
-  }
-  // power ring
-  ctx.lineCap = 'round';
-  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
-  ctx.lineWidth = 5;
-  circle(ctx, b.x, b.y, BALL_R + 9);
-  ctx.stroke();
-  ctx.strokeStyle = powerColor(power);
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.arc(b.x, b.y, BALL_R + 9, angle - power * Math.PI, angle + power * Math.PI);
-  ctx.stroke();
-}
-
-function drawDragIndicator() {
-  const a = S.aim;
-  const info = aimInfo();
-  if (!a || !info) return;
-  ctx.fillStyle = 'rgba(255,255,255,0.14)';
-  circle(ctx, a.x0, a.y0, 22);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  ctx.setLineDash([3, 6]);
-  ctx.beginPath();
-  ctx.moveTo(a.x0, a.y0);
-  ctx.lineTo(a.x, a.y);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.fillStyle = powerColor(info.power, 0.9);
-  circle(ctx, a.x, a.y, 12);
-  ctx.fill();
-  const label = info.power < 0.03 ? 'cancel' : `${Math.round(info.power * 100)}%`;
-  ctx.font = `20px ${FONT}`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'bottom';
-  ctx.lineWidth = 4;
-  ctx.strokeStyle = 'rgba(0,0,0,0.45)';
-  ctx.strokeText(label, a.x, a.y - 20);
-  ctx.fillStyle = '#fff';
-  ctx.fillText(label, a.x, a.y - 20);
-}
-
-function drawFlag(t) {
-  const W = S.world;
-  const [hx, hy] = toScreen(W.hole.x, W.hole.y);
-  const s = clamp(S.view.scale, 0.45, 1.3);
-  const H = 64 * s, fw = 30 * s, fh = 19 * s;
-  const b = ballDrawPos();
-  const near = Math.hypot(b.x - W.hole.x, b.y - W.hole.y) < 60 && !W.sunk;
-  let lift = 0;
-  if (W.sunk) lift = clamp((S.sinkT - 0.2) / 0.3, 0, 1) * Math.abs(Math.sin(S.sinkT * 10)) * 6 * s * clamp(2 - S.sinkT, 0, 1);
-  ctx.save();
-  ctx.globalAlpha = near ? 0.45 : 1;
-  // pole shadow along the ground
-  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
-  ctx.lineWidth = 2.5 * s;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(hx, hy);
-  ctx.lineTo(hx + H * 0.55, hy + H * 0.3);
-  ctx.stroke();
-  const top = hy - H - lift;
-  ctx.strokeStyle = '#e9e6dc';
-  ctx.lineWidth = 2.6 * s;
-  ctx.beginPath();
-  ctx.moveTo(hx, hy - lift);
-  ctx.lineTo(hx, top);
-  ctx.stroke();
-  // waving flag
-  ctx.fillStyle = '#e8433a';
-  ctx.beginPath();
-  ctx.moveTo(hx, top);
-  const n = 8;
-  for (let i = 0; i <= n; i++) {
-    const f = i / n;
-    ctx.lineTo(hx + f * fw, top + f * fh * 0.5 + Math.sin(t * 5 - f * 4) * 2.4 * s * f);
-  }
-  for (let i = n; i >= 0; i--) {
-    const f = i / n;
-    ctx.lineTo(hx + f * fw, top + fh - f * fh * 0.5 + Math.sin(t * 5 - f * 4) * 2.4 * s * f);
-  }
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = '#fff';
-  ctx.font = `${Math.round(11 * s)}px ${FONT}`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(String(S.mode === 'title' ? '' : S.hole + 1), hx + fw * 0.38, top + fh * 0.48);
-  ctx.fillStyle = '#f5d76e';
-  circle(ctx, hx, top, 2.4 * s);
-  ctx.fill();
-  ctx.restore();
-}
-
-/* ---------- particles & popups ---------- */
-
-function burst(x, y, n, o) {
-  for (let i = 0; i < n; i++) {
-    const a = o.angle != null ? o.angle + (Math.random() - 0.5) * (o.spread ?? TAU) : Math.random() * TAU;
-    const sp = (o.speed ?? 120) * (0.4 + Math.random() * 0.8);
-    const life = (o.life ?? 0.6) * (0.6 + Math.random() * 0.6);
-    const colors = o.colors || [o.color || '#fff'];
-    S.particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life, max: life, size: (o.size ?? 3) * (0.6 + Math.random() * 0.8), color: colors[i % colors.length], drag: o.drag ?? 3 });
-  }
-}
-
-function ring(x, y, r0, r1, color, life = 0.5, width = 3) {
-  S.particles.push({ ring: true, x, y, r0, r1, color, life, max: life, width });
-}
-
-function drawParticles() {
-  for (const p of S.particles) {
-    const f = p.life / p.max;
-    ctx.globalAlpha = clamp(f, 0, 1);
-    if (p.ring) {
-      ctx.strokeStyle = p.color;
-      ctx.lineWidth = p.width * f;
-      circle(ctx, p.x, p.y, lerp(p.r1, p.r0, f));
-      ctx.stroke();
-    } else {
-      ctx.fillStyle = p.color;
-      circle(ctx, p.x, p.y, p.size * (0.5 + f * 0.5));
-      ctx.fill();
-    }
-  }
-  ctx.globalAlpha = 1;
-}
-
-function popup(text, x, y, o = {}) {
-  S.popups.push({ text, x, y, t: 0, life: o.life ?? 1.4, size: o.size ?? 26, color: o.color ?? '#fff' });
-}
-
-function popupAtWorld(text, wx, wy, o) {
-  const [x, y] = toScreen(wx, wy);
-  popup(text, x, y - 24, o);
-}
-
-function drawPopups() {
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  for (const p of S.popups) {
-    const f = p.t / p.life;
-    const pop = f < 0.12 ? f / 0.12 : 1;
-    const size = p.size * (0.6 + 0.4 * pop) * (f < 0.12 ? 1 + (1 - pop) * 0.3 : 1);
-    ctx.globalAlpha = f > 0.7 ? (1 - f) / 0.3 : 1;
-    ctx.font = `${Math.round(size)}px ${FONT}`;
-    const y = p.y - f * 40;
-    ctx.lineWidth = size * 0.22;
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = 'rgba(10,30,15,0.7)';
-    ctx.strokeText(p.text, p.x, y);
-    ctx.fillStyle = p.color;
-    ctx.fillText(p.text, p.x, y);
-  }
-  ctx.globalAlpha = 1;
-}
-
-const CONFETTI = ['#f5d76e', '#e8433a', '#4fc3f7', '#ffffff', '#8be08b', '#ff9ec7'];
-
-function confettiBurst(n) {
-  const { w } = S.view;
-  for (let i = 0; i < n; i++) {
-    S.confetti.push({
-      x: Math.random() * w,
-      y: -20 - Math.random() * 200,
-      vx: (Math.random() - 0.5) * 120,
-      vy: 80 + Math.random() * 160,
-      rot: Math.random() * TAU,
-      vr: (Math.random() - 0.5) * 10,
-      w: 6 + Math.random() * 6,
-      h: 10 + Math.random() * 8,
-      color: CONFETTI[i % CONFETTI.length],
-      life: 4,
-    });
-  }
-}
-
-function drawConfetti() {
-  for (const c of S.confetti) {
-    ctx.save();
-    ctx.translate(c.x, c.y);
-    ctx.rotate(c.rot);
-    ctx.scale(1, Math.cos(c.rot * 2));
-    ctx.fillStyle = c.color;
-    ctx.globalAlpha = clamp(c.life, 0, 1);
-    ctx.fillRect(-c.w / 2, -c.h / 2, c.w, c.h);
-    ctx.restore();
-  }
-}
-
-function initFireflies() {
-  const L = S.world.level;
-  S.fireflies = [];
-  if (!(THEMES[L.theme] || {}).fireflies) return;
-  const vis = visibleWorld(0);
-  const r = rng(7);
-  for (let i = 0; i < 26; i++) S.fireflies.push({ x: vis.x + r() * vis.w, y: vis.y + r() * vis.h, p: r() * TAU, s: 0.5 + r() });
-}
-
-function drawFireflies(t) {
-  for (const f of S.fireflies) {
-    const x = f.x + Math.sin(t * 0.4 * f.s + f.p) * 30;
-    const y = f.y + Math.cos(t * 0.3 * f.s + f.p * 2) * 24;
-    const a = 0.35 + 0.65 * Math.max(0, Math.sin(t * 1.5 * f.s + f.p));
-    const g = ctx.createRadialGradient(x, y, 0, x, y, 10);
-    g.addColorStop(0, `rgba(250,255,170,${a})`);
-    g.addColorStop(1, 'rgba(250,255,170,0)');
-    ctx.fillStyle = g;
-    circle(ctx, x, y, 10);
-    ctx.fill();
-  }
-}
-
-/* ---------- game flow ---------- */
-
-function loadHole(i, mode) {
-  S.hole = i;
-  S.world = new World(LEVELS[i]);
-  S.strokes = 0;
-  S.trail = [];
-  S.aim = null;
-  S.particles = [];
-  S.popups = [];
-  S.hidden = 0;
-  S.sinkT = 0;
-  S.finishing = false;
-  S.token++;
-  S.demoT = 0;
-  S.demoShots = 0;
-  if (mode) setMode(mode);
+  updatePanel();
   updateHud();
-  buildView();
-  if (S.mode === 'play') showBanner(i);
 }
 
-function setMode(mode) {
-  S.mode = mode;
-  $('#hud').hidden = !(mode === 'play' || mode === 'card' || mode === 'paused');
-  for (const id of ['title', 'practice', 'card', 'pause', 'final']) $('#' + id).hidden = true;
-  const screen = { title: 'title', practice: 'practice', card: 'card', paused: 'pause', final: 'final' }[mode];
-  if (screen) $('#' + screen).hidden = false;
-  if (mode !== 'play') $('#hint').hidden = true;
+function defaultAim(ball, ci) {
+  const dist = toPin(hole, ball);
+  const reach = CLUBS[ci].putter ? Infinity : clubCarry(ci, ball.lie) + CLUBS[ci].roll;
+  if (dist <= reach + 15) return Math.atan2(hole.pin.y - ball.y, hole.pin.x - ball.x);
+  // Out of range: aim down the centre line at the club's distance.
+  const [, sBall] = hole.nearest(ball.x, ball.y);
+  let pt = hole.path[hole.path.length - 1];
+  for (const q of hole.path) if (q.s > sBall && Math.hypot(q.x - ball.x, q.y - ball.y) >= reach * 0.95) { pt = q; break; }
+  return Math.atan2(pt.y - ball.y, pt.x - ball.x);
 }
 
-function totalRel() {
-  let rel = 0;
-  S.scores.forEach((s, i) => { if (s != null) rel += s - par(i); });
-  return rel;
+function takeShot(power, acc) {
+  const p = G.turn;
+  const ball = G.players[p].ball;
+  const input = { club: U.club, aim: U.aim, power, acc, puttScale: U.puttScale };
+  const res = simulateShot(hole, ball, input, wind, shotSeed(G.seed, G.h, p, G.n));
+  const after = applyShot(G, hole, p, res);
+  if (U.online) U.online.link.send({ t: 'shot', n: G.n, p, input, after });
+  startAnim(p, input, res, after);
 }
 
-function updateHud() {
-  const L = LEVELS[S.hole];
-  $('#hNum').textContent = S.hole + 1;
-  $('#hCount').textContent = LEVELS.length;
-  $('#hName').textContent = L.name;
-  $('#hPar').textContent = L.par;
-  $('#hStrokes').textContent = S.strokes;
-  const tot = $('#hTotalWrap');
-  tot.hidden = S.practice;
-  $('#hTotal').textContent = relScore(totalRel());
-}
-
-function showBanner(i) {
-  const el = $('#banner');
-  const L = LEVELS[i];
-  el.innerHTML = `<small>Hole ${i + 1}</small><strong></strong><span>Par ${L.par}</span>`;
-  el.querySelector('strong').textContent = L.name;
-  el.classList.remove('show');
-  void el.offsetWidth;
-  el.classList.add('show');
-  if (i === 0 && !store.get('tutorialDone', false)) setTimeout(() => { if (S.mode === 'play' && S.strokes === 0) $('#hint').hidden = false; }, 900);
-}
-
-function shoot(info) {
-  const W = S.world;
-  if (!W.shoot(info.angle, info.power)) return;
-  S.strokes++;
-  sound.putt(info.power);
-  const b = W.ball;
-  burst(b.x, b.y, 8, { angle: info.angle + Math.PI, spread: 1.4, speed: 60 + info.power * 80, color: 'rgba(210,255,190,0.9)', size: 2, life: 0.4 });
-  updateHud();
-  if (!$('#hint').hidden) {
-    $('#hint').hidden = true;
-    store.set('tutorialDone', true);
+function startAnim(p, input, res, after) {
+  const ball = G.players[p].ball;
+  const club = CLUBS[input.club];
+  const t = cameraTarget();
+  U.anim = { p, input, res, after, t: 0, i: 0, fired: 0, hold: 0, view: { ...U.cam, bx: ball.x, by: ball.y }, trail: [] };
+  if (U.phase !== 'aim') U.anim.view = { ...t, bx: ball.x, by: ball.y };
+  U.phase = 'flight';
+  U.swing = { phase: 'idle' };
+  if (club.putter) sound.putt();
+  else {
+    const e = input.acc;
+    sound.strike(club.carry > 200 ? 'wood' : 'iron', Math.abs(e) <= 0.22 ? 'perfect' : Math.abs(e) > 1 ? 'bad' : 'ok');
+    popup(shotLabel(e), Math.abs(e) <= 0.22 ? '#ffe27a' : Math.abs(e) > 1 ? '#ff9a8a' : '#ffffff', 1.3, 30);
+    if (ball.lie === T.SAND) R.burst(ball.x, ball.y, 26, { colors: ['#f3e3b5', '#d9c38c'], speed: 6, up: 6, life: 0.9, size: 0.25 });
+    else if (ball.lie !== T.TEE) R.burst(ball.x, ball.y, 12, { colors: ['#5c8a3a', '#7a5a33'], speed: 5, up: 5, life: 0.7, size: 0.2, angle: input.aim, spread: 0.8 });
   }
+  updatePanel();
 }
 
-function handleEvents() {
-  const W = S.world;
-  const audible = S.mode !== 'title';
-  for (const e of W.events) {
-    switch (e.type) {
-      case 'hit':
-        if (audible) sound.hit(e.s);
-        if (e.s > 250) burst(e.x, e.y, 5, { speed: 70, color: 'rgba(255,255,255,0.8)', size: 1.8, life: 0.3 });
-        break;
-      case 'bumper':
-        if (audible) sound.bumper();
-        ring(e.x, e.y, 6, 34, '#ffd0d6', 0.35, 4);
-        burst(e.x, e.y, 8, { speed: 160, colors: ['#ff8a9a', '#fff'], size: 2.4, life: 0.35 });
-        break;
-      case 'sand':
-        if (audible) sound.sand();
-        burst(e.x, e.y, 16, { speed: 40 + e.s * 0.12, colors: ['#e8d196', '#cfb170', '#fff3cc'], size: 2.4, life: 0.6 });
-        break;
-      case 'lip':
-        if (audible) sound.lip();
-        if (S.mode === 'play') popupAtWorld('Lipped out!', e.x, e.y, { size: 22, color: '#ffe9a8' });
-        break;
-      case 'water':
-        if (audible) sound.splash();
-        ring(e.x, e.y, 4, 40, 'rgba(255,255,255,0.9)', 0.8, 3);
-        ring(e.x, e.y, 2, 24, 'rgba(200,240,255,0.9)', 0.6, 2);
-        burst(e.x, e.y, 22, { speed: 140, colors: ['#bfe9ff', '#ffffff', '#6cc6f7'], size: 2.6, life: 0.7 });
-        S.hidden = 0.9;
-        S.trail = [];
-        if (S.mode === 'play') {
-          S.strokes++;
-          updateHud();
-          popupAtWorld('Splash! +1', e.x, e.y, { color: '#a8e4ff' });
-        }
-        break;
-      case 'oob':
-        S.hidden = 0.5;
-        S.trail = [];
-        if (S.mode === 'play') popupAtWorld('Out of bounds', e.x, e.y, { size: 22 });
-        break;
-      case 'portal': {
-        if (audible) sound.portal();
-        const [tx, ty] = e.extra;
-        ring(e.x, e.y, PORTAL_R, 4, '#e2c6ff', 0.4, 3);
-        ring(tx, ty, 4, PORTAL_R * 1.8, '#e2c6ff', 0.5, 3);
-        burst(tx, ty, 14, { speed: 150, colors: ['#e2c6ff', '#b388ff', '#fff'], size: 2.2, life: 0.5 });
-        S.trail = [];
-        break;
-      }
-      case 'sink':
-        S.sinkT = 0;
-        onSink();
-        break;
-      case 'rest':
-        if (S.mode === 'play' && S.strokes >= MAX_STROKES && !W.sunk) {
-          popupAtWorld('Picked up', W.ball.x, W.ball.y, { size: 24 });
-          S.finishing = true;
-          const token = S.token;
-          setTimeout(() => token === S.token && finishHole(true), 900);
-        }
-        break;
+function stepAnim(dt) {
+  const a = U.anim;
+  if (!a) return;
+  const frames = a.res.frames;
+  if (a.i < frames.length - 1) {
+    a.t += dt;
+    a.i = Math.min(frames.length - 1, Math.floor(a.t * 60));
+    const f = frames[a.i];
+    a.trail.push({ x: f.x, y: f.y, z: f.z });
+    if (a.trail.length > 36) a.trail.shift();
+    for (const ev of a.res.events) {
+      if (ev.f > a.i || ev.done) continue;
+      ev.done = true;
+      fireEvent(ev, a);
     }
+    return;
   }
-  W.events.length = 0;
+  if (a.trail.length) a.trail.shift();
+  if (a.hold === 0) finishShotFx(a);
+  a.hold += dt;
+  if (a.hold > (a.res.outcome === 'holed' ? 1.8 : 1.1)) {
+    U.anim = null;
+    const prevH = G.h;
+    G = a.after;
+    save();
+    updateHud();
+    if (G.h !== prevH || G.done) showCard();
+    else enterTurn();
+  }
 }
 
-function onSink() {
-  const W = S.world;
-  if (S.mode === 'title') return;
-  sound.sink();
-  ring(W.hole.x, W.hole.y, HOLE_R, 50, 'rgba(255,255,255,0.9)', 0.6, 4);
-  const d = S.strokes - par(S.hole);
-  const term = scoreTerm(S.strokes, par(S.hole));
-  const good = S.strokes === 1 || d < 0;
-  popupAtWorld(term, W.hole.x, W.hole.y, { size: good ? 40 : 30, color: good ? '#ffe27a' : '#ffffff', life: 1.6 });
-  if (S.strokes === 1) { sound.fanfare(3); confettiBurst(180); }
-  else if (d <= -1) { sound.fanfare(2); confettiBurst(110); }
-  else if (d === 0) { sound.fanfare(1); confettiBurst(40); }
-  else sound.womp();
-  S.finishing = true;
-  const token = S.token;
-  setTimeout(() => token === S.token && finishHole(false), 1500);
+function fireEvent(ev, a) {
+  switch (ev.type) {
+    case 'tree':
+      sound.tree();
+      R.burst(ev.x, ev.y, 18, { colors: ['#2f6e2c', '#4a9a3e', '#1f4d20'], speed: 4, up: 2, life: 1.1, size: 0.35 });
+      popup('Timber!', '#c9f0b0', 1.1, 26);
+      break;
+    case 'land': {
+      const t = ev.terrain;
+      if (t === T.SAND) {
+        sound.land('sand');
+        R.burst(ev.x, ev.y, 22, { colors: ['#f3e3b5', '#d9c38c'], speed: 4, up: 4, life: 0.9, size: 0.3 });
+      } else if (t === T.GREEN || t === T.FRINGE) sound.land('green');
+      else if (t === T.ROUGH || t === T.DEEP) sound.land('rough');
+      else if (t !== T.WATER) sound.land('fairway');
+      if (!CLUBS[a.input.club].putter && t !== T.WATER) popup(`${Math.round(a.res.carry)} yd carry`, '#ffffff', 1.4, 20, true);
+      break;
+    }
+    case 'splash':
+      sound.splash();
+      R.ring(ev.x, ev.y, 0.4, 5, 'rgba(255,255,255,0.9)', 0.9);
+      R.ring(ev.x, ev.y, 0.2, 3, 'rgba(200,240,255,0.9)', 0.7);
+      R.burst(ev.x, ev.y, 20, { colors: ['#d6f1ff', '#ffffff', '#7cc6f2'], speed: 3, up: 7, life: 0.8, size: 0.25 });
+      break;
+    case 'lip':
+      sound.lip();
+      break;
+    case 'dunk':
+      break;
+  }
 }
 
-function finishHole(pickedUp) {
-  if (S.mode !== 'play' && S.mode !== 'paused') return;
-  const strokes = pickedUp ? MAX_STROKES : S.strokes;
-  S.scores[S.hole] = strokes;
-  const bests = store.get('holeBests', {});
-  if (!bests[S.hole] || strokes < bests[S.hole]) bests[S.hole] = strokes;
-  store.set('holeBests', bests);
-  const last = S.hole === LEVELS.length - 1;
-  if (!S.practice) store.set('round', last ? null : { hole: S.hole + 1, scores: S.scores });
+function finishShotFx(a) {
+  const res = a.res;
+  const pl = G.players[a.p];
+  if (res.outcome === 'holed') {
+    sound.cup();
+    const strokes = pl.strokes + 1 + res.penalty;
+    const d = strokes - hole.par;
+    const name = scoreName(strokes, hole.par);
+    popup(name, d < 0 || strokes === 1 ? '#ffe27a' : '#ffffff', 2, strokes === 1 || d <= -1 ? 48 : 38);
+    sound.applause(strokes === 1 ? 3 : d <= -2 ? 3 : d === -1 ? 2 : d === 0 ? 1 : 0);
+    R.ring(hole.pin.x, hole.pin.y, 0.1, 2.5, 'rgba(255,255,255,0.9)', 0.8);
+  } else if (res.outcome === 'water') {
+    popup('In the water', '#a8e4ff', 1.8, 34);
+    popup('Penalty stroke – drop behind the hazard', '#ffffff', 1.8, 18, true);
+    sound.groan();
+  } else if (res.outcome === 'ob') {
+    popup('Out of bounds', '#ffb3a6', 1.8, 34);
+    popup('Penalty stroke – replay from the same spot', '#ffffff', 1.8, 18, true);
+    sound.groan();
+  } else if (res.final.lie === T.SAND) {
+    popup('In the bunker', '#f3e3b5', 1.2, 24);
+  } else if (CLUBS[a.input.club].putter) {
+    const ft = Math.round(toPin(hole, res.final) * 3);
+    if (ft <= 3) popup('Tap-in range', '#ffffff', 1.1, 22);
+  }
+}
 
-  const p = par(S.hole);
-  const d = strokes - p;
-  const card = $('#card');
-  card.dataset.tone = strokes === 1 || d < 0 ? 'great' : d === 0 ? 'good' : 'meh';
-  $('#cardTerm').textContent = pickedUp ? 'Picked Up' : scoreTerm(strokes, p);
-  $('#cardSub').textContent = `${strokes} ${strokes === 1 ? 'stroke' : 'strokes'} on a par ${p}`;
-  $('#cardHole').textContent = `Hole ${S.hole + 1} · ${LEVELS[S.hole].name}`;
-  $('#cardTotal').hidden = S.practice;
-  $('#cardTotal').textContent = `Round: ${relScore(totalRel())} after ${S.hole + 1} of ${LEVELS.length}`;
-  $('#btnNext').textContent = S.practice ? 'Play Again' : last ? 'See Scorecard' : 'Next Hole';
-  $('#btnCardMenu').hidden = !S.practice;
-  setMode('card');
-  updateHud();
+function showCard() {
+  const last = G.last;
+  if (!last) return;
+  const par = HOLES[last.hole].par;
+  const lines = G.players.map((p, i) => {
+    const s = last.results[i];
+    return `<div class="card-row"><span class="dot" style="background:${COLORS[i]}"></span><span class="nm"></span><b>${last.picked[i] ? 'Picked up' : scoreName(s, par)}</b><span class="num">${s}</span><span class="rel">${fmtRel(relPar(p, G))}</span></div>`;
+  });
+  $('#cardHole').textContent = `Hole ${last.h + 1} · ${HOLES[last.hole].name} · Par ${par}`;
+  $('#cardRows').innerHTML = lines.join('');
+  [...$('#cardRows').querySelectorAll('.nm')].forEach((el, i) => (el.textContent = G.players[i].name));
+  const best = Math.min(...last.results);
+  const single = G.players.length === 1;
+  $('#cardTitle').textContent = single ? scoreName(last.results[0], par) : last.results.filter((s) => s === best).length > 1 ? 'Hole halved' : `${G.players[last.results.indexOf(best)].name} wins the hole`;
+  $('#cardNext').textContent = G.done ? 'See final scorecard' : G.mode === 'practice' ? 'Play it again' : 'Next hole';
+  $('#cardMenu').hidden = G.mode !== 'practice';
+  setScreen('card');
 }
 
 function nextFromCard() {
   sound.click();
-  if (S.practice) return loadHole(S.hole, 'play');
-  if (S.hole >= LEVELS.length - 1) return showFinal();
-  loadHole(S.hole + 1, 'play');
-}
-
-function scorecardHTML(scores) {
-  const cells = (fn) => LEVELS.map((L, i) => fn(L, i)).join('');
-  let tot = 0, parTot = 0;
-  scores.forEach((s, i) => { if (s != null) { tot += s; parTot += par(i); } });
-  const mark = (s, i) => {
-    if (s == null) return '<td class="empty">–</td>';
-    const d = s - par(i);
-    const cls = s === 1 ? 'ace' : d <= -2 ? 'eagle' : d === -1 ? 'birdie' : d === 0 ? 'par' : d === 1 ? 'bogey' : 'dbl';
-    return `<td><span class="sc ${cls}">${s}</span></td>`;
-  };
-  return `<div class="sc-wrap"><table class="scorecard">
-    <thead><tr><th>Hole</th>${cells((L, i) => `<th>${i + 1}</th>`)}<th>Tot</th></tr></thead>
-    <tbody>
-      <tr class="par-row"><th>Par</th>${cells((L) => `<td>${L.par}</td>`)}<td>${LEVELS.reduce((a, L) => a + L.par, 0)}</td></tr>
-      <tr><th>You</th>${cells((L, i) => mark(scores[i], i))}<td class="tot">${tot || '–'}</td></tr>
-    </tbody></table></div>
-    <div class="sc-legend"><span><i class="sc birdie"></i>Birdie or better</span><span><i class="sc bogey"></i>Bogey or worse</span></div>`;
+  if (G.mode === 'practice') {
+    G = newGame('practice', [G.players[0].name], G.holes);
+    startPlay();
+    return;
+  }
+  if (G.done) return showFinal();
+  setScreen('play');
+  beginHole();
 }
 
 function showFinal() {
-  const total = S.scores.reduce((a, b) => a + (b || 0), 0);
-  const rel = totalRel();
-  const best = store.get('bestRound', null);
-  const isBest = best == null || total < best;
-  if (isBest) store.set('bestRound', total);
-  store.set('round', null);
-  $('#finalScore').textContent = total;
-  $('#finalRel').textContent = rel === 0 ? 'Even par' : `${relScore(rel)} ${rel > 0 ? 'over' : 'under'} par`;
-  $('#finalBest').textContent = isBest ? 'New personal best!' : `Personal best: ${best}`;
-  $('#finalBest').classList.toggle('new', isBest);
-  $('#finalCard').innerHTML = scorecardHTML(S.scores);
-  setMode('final');
-  if (rel <= 0) { sound.fanfare(3); confettiBurst(200); }
+  const pars = G.holes.map((h) => HOLES[h].par);
+  const parTot = pars.reduce((a, b) => a + b, 0);
+  const totals = G.players.map((p) => p.scores.reduce((a, b) => a + b, 0));
+  let title;
+  if (G.players.length === 1) {
+    const best = store.get('bestRound', null);
+    const isBest = G.mode === 'solo' && (best == null || totals[0] < best);
+    if (isBest) store.set('bestRound', totals[0]);
+    title = isBest ? 'New personal best!' : `Round complete${best != null ? ` · best ${best}` : ''}`;
+  } else {
+    const m = Math.min(...totals);
+    const winners = totals.map((t, i) => (t === m ? i : -1)).filter((i) => i >= 0);
+    title = winners.length > 1 ? 'All square!' : `${G.players[winners[0]].name} wins`;
+  }
+  $('#finalTitle').textContent = title;
+  $('#finalCard').innerHTML = scorecardHTML(G);
+  setScreen('final');
+  sound.applause(2);
+  if (G.mode === 'solo') store.set('solo', null);
+  if (G.mode === 'online') store.set('online', null);
 }
 
-function startRound(fromSave) {
-  sound.click();
-  S.practice = false;
-  const saved = fromSave ? store.get('round', null) : null;
-  S.scores = saved ? saved.scores : [];
-  loadHole(saved ? saved.hole : 0, 'play');
+function scorecardHTML(g) {
+  const holes = g.holes;
+  const cell = (s, par) => {
+    if (s == null) return '<td class="empty">–</td>';
+    const d = s - par;
+    const cls = s === 1 ? 'ace' : d <= -2 ? 'eagle' : d === -1 ? 'birdie' : d === 0 ? 'par' : d === 1 ? 'bogey' : 'dbl';
+    return `<td><span class="sc ${cls}">${s}</span></td>`;
+  };
+  const parTot = holes.reduce((a, h) => a + HOLES[h].par, 0);
+  const rows = g.players
+    .map((p, i) => {
+      const tot = p.scores.reduce((a, b) => a + b, 0);
+      return `<tr><th><span class="dot" style="background:${COLORS[i]}"></span>${escapeHtml(p.name)}</th>${holes.map((h, k) => cell(p.scores[k], HOLES[h].par)).join('')}<td class="tot">${p.scores.length ? tot : '–'}</td><td class="tot">${p.scores.length ? fmtRel(relPar(p, g)) : ''}</td></tr>`;
+    })
+    .join('');
+  return `<div class="sc-wrap"><table class="scorecard"><thead><tr><th>Hole</th>${holes.map((h) => `<th>${h + 1}</th>`).join('')}<th>Tot</th><th>±</th></tr></thead>
+    <tbody><tr class="par-row"><th>Par</th>${holes.map((h) => `<td>${HOLES[h].par}</td>`).join('')}<td>${parTot}</td><td></td></tr>${rows}</tbody></table></div>`;
 }
 
-function toTitle() {
-  S.token++;
-  S.finishing = false;
-  S.practice = false;
-  S.scores = [];
-  setMode('title');
-  refreshTitle();
-  startDemo(Math.floor(Math.random() * LEVELS.length));
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
-function refreshTitle() {
-  const saved = store.get('round', null);
-  const cont = $('#btnContinue');
-  cont.hidden = !saved;
-  if (saved) cont.textContent = `Continue · Hole ${saved.hole + 1}`;
-  const best = store.get('bestRound', null);
-  const parTot = LEVELS.reduce((a, L) => a + L.par, 0);
-  $('#bestLine').textContent = best == null ? `${LEVELS.length} holes · Par ${parTot}` : `Best round: ${best} (${relScore(best - parTot)})`;
-  $('#btnSound').setAttribute('aria-pressed', String(!sound.muted));
-  $('#btnSound').textContent = sound.muted ? 'Sound off' : 'Sound on';
+// ---------- swing meter ----------
+
+function meterPos(now) {
+  const s = U.swing;
+  const up = CLUBS[U.club].up * 1000;
+  if (s.phase === 'up') return (now - s.t0) / up;
+  if (s.phase === 'down') return s.power - ((now - s.t1) / up) * 1.3;
+  return 0;
 }
 
-function startDemo(i) {
-  S.hole = i;
-  S.world = new World(LEVELS[i]);
-  S.trail = [];
-  S.sinkT = 0;
-  S.demoT = 0;
-  S.demoShots = 0;
-  S.hidden = 0;
-  buildView();
+function swingTap(ts) {
+  if (U.phase !== 'aim' || U.anim) return;
+  const now = Math.abs(ts - performance.now()) < 500 ? ts : performance.now();
+  const s = U.swing;
+  const putter = CLUBS[U.club].putter;
+  if (s.phase === 'idle') {
+    U.swing = { phase: 'up', t0: now };
+    sound.tick();
+  } else if (s.phase === 'up') {
+    const m = Math.max(0.02, Math.min(putter ? 1 : METER_MAX, meterPos(now)));
+    if (putter) return takeShot(m, 0);
+    U.swing = { phase: 'down', power: m, t1: now };
+    sound.tick();
+  } else if (s.phase === 'down') {
+    const m = meterPos(now);
+    finishSwing(s.power, m);
+  }
+  updatePanel();
 }
 
-function demoTick(dt) {
-  const W = S.world;
-  if (W.sunk) {
-    if (S.sinkT > 1.6) startDemo((S.hole + 1) % LEVELS.length);
+function finishSwing(power, m) {
+  const ball = currentBall();
+  const w = meterWindow(ball.lie, U.club, power);
+  takeShot(power, m / w);
+}
+
+function tickMeter() {
+  const s = U.swing;
+  if (s.phase === 'idle') return;
+  const now = performance.now();
+  const m = meterPos(now);
+  const putter = CLUBS[U.club].putter;
+  if (s.phase === 'up' && m >= (putter ? 1 : METER_MAX)) {
+    if (putter) return takeShot(1, 0);
+    U.swing = { phase: 'down', power: METER_MAX, t1: now };
+  } else if (s.phase === 'down' && m <= METER_MIN) {
+    finishSwing(s.power, METER_MIN);
+  }
+}
+
+function drawMeter() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const rect = meterCv.getBoundingClientRect();
+  if (Math.round(rect.width * dpr) !== meterCv.width || Math.round(rect.height * dpr) !== meterCv.height) {
+    meterCv.width = Math.round(rect.width * dpr);
+    meterCv.height = Math.round(rect.height * dpr);
+  }
+  const W = meterCv.width / dpr, H = meterCv.height / dpr;
+  if (!W || !H) return;
+  const c = mctx;
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, W, H);
+  if (!G || U.screen !== 'play') return;
+  const ball = currentBall();
+  const club = CLUBS[U.club];
+  const putter = !!club.putter;
+  const pad = 14;
+  const top = 26, bh = H - top - 18;
+  const lo = putter ? 0 : METER_MIN, hi = putter ? 1 : METER_MAX;
+  const X = (m) => pad + ((m - lo) / (hi - lo)) * (W - pad * 2);
+  const s = U.swing;
+  const now = performance.now();
+  const m = s.phase === 'idle' ? 0 : meterPos(now);
+
+  // track
+  c.fillStyle = 'rgba(0,0,0,0.35)';
+  rr(c, pad - 4, top - 4, W - pad * 2 + 8, bh + 8, 12);
+  c.fill();
+  const grad = c.createLinearGradient(X(0), 0, X(1), 0);
+  grad.addColorStop(0, '#2d6b3a');
+  grad.addColorStop(0.7, '#c9b33d');
+  grad.addColorStop(1, '#d9612f');
+  c.fillStyle = 'rgba(255,255,255,0.08)';
+  rr(c, pad, top, W - pad * 2, bh, 9);
+  c.fill();
+  if (!putter) {
+    // overswing zone
+    c.fillStyle = 'rgba(232,67,58,0.35)';
+    c.fillRect(X(1), top, X(METER_MAX) - X(1), bh);
+    // accuracy window
+    const pw = s.phase === 'down' ? s.power : 1;
+    const w = meterWindow(ball.lie, U.club, pw);
+    c.fillStyle = 'rgba(120,230,120,0.35)';
+    c.fillRect(X(-w), top, X(w) - X(-w), bh);
+    c.fillStyle = 'rgba(255,240,140,0.8)';
+    c.fillRect(X(-w * 0.22), top, X(w * 0.22) - X(-w * 0.22), bh);
+    c.fillStyle = 'rgba(0,0,0,0.25)';
+    c.fillRect(X(METER_MIN), top, X(-w) - X(METER_MIN), bh);
+  }
+  // power fill
+  const fillTo = s.phase === 'up' ? m : s.phase === 'down' ? s.power : 0;
+  if (fillTo > 0) {
+    c.fillStyle = grad;
+    c.globalAlpha = 0.85;
+    c.fillRect(X(0), top + 6, Math.max(0, X(Math.min(fillTo, hi)) - X(0)), bh - 12);
+    c.globalAlpha = 1;
+  }
+  // ticks with distances
+  c.font = '700 11px Nunito, ui-rounded, system-ui, sans-serif';
+  c.textAlign = 'center';
+  c.textBaseline = 'bottom';
+  const full = clubCarry(U.club, ball.lie);
+  for (const k of [0.25, 0.5, 0.75, 1]) {
+    c.fillStyle = 'rgba(255,255,255,0.55)';
+    c.fillRect(X(k) - 0.5, top, 1, bh);
+    c.fillStyle = 'rgba(255,255,255,0.85)';
+    const label = putter ? `${Math.round(full * k * 3)} ft` : `${Math.round(full * k)}`;
+    c.fillText(label, X(k), top - 6);
+  }
+  if (!putter) {
+    c.fillStyle = '#fff';
+    c.fillRect(X(0) - 1.5, top - 2, 3, bh + 4);
+  }
+  // chosen power
+  if (s.phase === 'down') {
+    c.fillStyle = '#fff';
+    c.beginPath();
+    c.moveTo(X(s.power), top + bh + 2);
+    c.lineTo(X(s.power) - 7, top + bh + 13);
+    c.lineTo(X(s.power) + 7, top + bh + 13);
+    c.fill();
+  }
+  // marker
+  if (s.phase !== 'idle') {
+    const x = X(Math.max(lo, Math.min(hi, m)));
+    c.fillStyle = 'rgba(0,0,0,0.4)';
+    c.fillRect(x - 2, top - 6, 6, bh + 12);
+    c.fillStyle = '#ffffff';
+    c.fillRect(x - 3, top - 7, 6, bh + 14);
+  }
+}
+
+function rr(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r);
+  c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);
+  c.arcTo(x, y, x + w, y, r);
+  c.closePath();
+}
+
+// ---------- popups ----------
+
+function popup(text, color, life = 1.5, size = 30, small = false) {
+  U.popups.push({ text, color, life, max: life, size, small, t: 0, row: small ? 1 : 0 });
+  // keep newest on top
+  if (U.popups.length > 4) U.popups.shift();
+}
+
+function drawPopups(dt) {
+  const ctx = R.ctx;
+  const dpr = R.dpr;
+  const vp = viewport();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  let y0 = vp.top + 70;
+  const big = U.popups.filter((p) => !p.small).slice(-1);
+  const small = U.popups.filter((p) => p.small).slice(-1);
+  for (const p of [...big, ...small]) {
+    const f = p.t / p.max;
+    const a = f < 0.1 ? f / 0.1 : f > 0.75 ? (1 - f) / 0.25 : 1;
+    ctx.globalAlpha = Math.max(0, a);
+    ctx.font = `${p.small ? 800 : 400} ${p.size}px ${p.small ? 'Nunito, ui-rounded, system-ui, sans-serif' : '"Lilita One", ui-rounded, system-ui, sans-serif'}`;
+    ctx.lineWidth = p.size * 0.2;
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(8,24,14,0.75)';
+    ctx.strokeText(p.text, vp.sx, y0);
+    ctx.fillStyle = p.color;
+    ctx.fillText(p.text, vp.sx, y0);
+    y0 += p.size + 10;
+  }
+  ctx.globalAlpha = 1;
+  for (const p of U.popups) p.t += dt;
+  U.popups = U.popups.filter((p) => p.t < p.max);
+}
+
+// ---------- HUD & panel ----------
+
+function updateHud() {
+  if (!G || !hole) return;
+  $('#hNum').textContent = G.h + 1 > G.holes.length ? G.holes.length : G.h + 1;
+  $('#hCount').textContent = G.holes.length;
+  $('#hName').textContent = hole.name;
+  $('#hPar').textContent = hole.par;
+  $('#hYards').textContent = hole.yards;
+  $('#windSpeed').textContent = wind.speed;
+  const chips = G.players
+    .map((p, i) => `<div class="chip${i === G.turn ? ' on' : ''}" style="--c:${COLORS[i]}"><span class="dot"></span><span class="nm"></span><span class="st">${p.holed ? '✓ ' + p.strokes : p.strokes}</span><span class="rl">${fmtRel(relPar(p, G))}</span></div>`)
+    .join('');
+  $('#chips').innerHTML = chips;
+  [...$('#chips').querySelectorAll('.nm')].forEach((el, i) => (el.textContent = G.players[i].name));
+}
+
+function updatePanel() {
+  if (!G || !hole) return;
+  const p = G.turn;
+  const pl = G.players[p];
+  const ball = pl.ball;
+  const mine = isLocal(p) && (U.phase === 'aim' || U.phase === 'pass');
+  $('#panelMine').hidden = !mine;
+  $('#panelWait').hidden = mine;
+  const dist = toPin(hole, ball);
+  $('#toPin').textContent = ball.lie === T.GREEN || dist < 20 ? `${Math.max(1, Math.round(dist * 3))} ft` : `${Math.round(dist)} yd`;
+  $('#lie').textContent = TERRAIN_NAMES[ball.lie];
+  $('#lie').dataset.lie = ball.lie;
+  if (!mine) {
+    const who = U.phase === 'intro' ? '' : U.phase === 'flight' ? (isLocal(p) ? '' : `${pl.name}’s shot`) : isLocal(p) ? '' : `Waiting for ${pl.name}…`;
+    $('#waitText').textContent = who || ' ';
     return;
   }
-  if (!W.canShoot() || S.hidden > 0) return;
-  S.demoT += dt;
-  if (S.demoT < 1.1) return;
-  S.demoT = 0;
-  if (S.demoShots++ > 6) return startDemo((S.hole + 1) % LEVELS.length);
-  const b = W.ball;
-  const d = Math.hypot(W.hole.x - b.x, W.hole.y - b.y);
-  const angle = Math.atan2(W.hole.y - b.y, W.hole.x - b.x) + (Math.random() - 0.5) * 0.5;
-  W.shoot(angle, clamp(0.3 + d / 1400 + Math.random() * 0.15, 0.25, 0.85));
+  const club = CLUBS[U.club];
+  $('#clubName').textContent = club.name;
+  if (club.putter) {
+    $('#clubInfo').textContent = `Range ${U.puttScale * 3} ft`;
+  } else {
+    const le = lieEffect(ball.lie, U.club);
+    $('#clubInfo').textContent = `${Math.round(club.carry * le.dist)} yd carry${le.dist < 0.99 ? ` (${TERRAIN_NAMES[ball.lie].toLowerCase()})` : ''}`;
+  }
+  $('#rangeBtn').hidden = !club.putter;
+  const s = U.swing.phase;
+  $('#swingHint').textContent = club.putter
+    ? s === 'idle' ? 'Tap to start the putt' : 'Tap to set the pace'
+    : s === 'idle' ? 'Tap to start your swing' : s === 'up' ? 'Tap to set power' : 'Tap on the white line!';
 }
 
-function showPractice() {
-  sound.click();
-  const bests = store.get('holeBests', {});
-  const grid = $('#holeGrid');
-  grid.innerHTML = '';
-  LEVELS.forEach((L, i) => {
-    const btn = document.createElement('button');
-    btn.className = 'hole-tile';
-    btn.id = `hole-${i + 1}`;
-    const best = bests[i];
-    btn.innerHTML = `<span class="num">${i + 1}</span><span class="nm"></span><span class="meta">Par ${L.par}${best ? ` · Best ${best}` : ''}</span>`;
-    btn.querySelector('.nm').textContent = L.name;
-    btn.addEventListener('click', () => {
-      sound.click();
-      S.practice = true;
-      S.scores = [];
-      loadHole(i, 'play');
-    });
-    grid.appendChild(btn);
-  });
-  setMode('practice');
+function setScreen(name) {
+  U.screen = name;
+  for (const id of ['title', 'lobby', 'setup', 'practice', 'card', 'final', 'pause', 'help']) $('#' + id).hidden = id !== name;
+  const inGame = name === 'play' || name === 'card' || name === 'pause' || name === 'final';
+  $('#hud').hidden = !inGame || name === 'final';
+  $('#panel').hidden = name !== 'play';
+  if (name !== 'play') $('#pass').hidden = true;
+  requestAnimationFrame(resize);
 }
 
-function pause() {
-  if (S.mode !== 'play') return;
-  sound.click();
-  S.aim = null;
-  $('#pauseCard').innerHTML = S.practice ? '' : scorecardHTML(S.scores);
-  $('#btnPauseSound').textContent = sound.muted ? 'Sound: Off' : 'Sound: On';
-  setMode('paused');
-}
-
-/* ---------- main loop ---------- */
+// ---------- main loop ----------
 
 let last = performance.now();
-
 function frame(now) {
-  const dt = Math.min((now - last) / 1000, 0.05);
+  const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
-  update(dt);
-  render();
+  U.time += dt;
+  try {
+    update(dt);
+    render(dt);
+  } catch (err) {
+    console.error(err);
+  }
   requestAnimationFrame(frame);
 }
 
 function update(dt) {
-  S.time += dt;
-  const W = S.world;
-  if (S.mode !== 'paused') {
-    const wasHidden = S.hidden > 0;
-    if (S.hidden > 0) S.hidden -= dt;
-    if (wasHidden && S.hidden <= 0) ring(W.ball.x, W.ball.y, 2, 22, 'rgba(255,255,255,0.8)', 0.4, 2);
-    W.update(dt);
-    handleEvents();
-    if (W.sunk) S.sinkT += dt;
-    if (W.moving) {
-      S.trail.push([W.ball.x, W.ball.y]);
-      if (S.trail.length > 12) S.trail.shift();
-    } else if (S.trail.length) {
-      S.trail.shift();
-    }
-    if (S.mode === 'title') demoTick(dt);
+  if (!G || !hole) return;
+  if (U.screen === 'play' || U.screen === 'card' || U.screen === 'pause') sound.ambient(dt);
+  if (U.screen !== 'play') return;
+  if (U.phase === 'intro') {
+    U.introT -= dt;
+    if (U.introT <= 0) enterTurn();
   }
-  for (const p of S.particles) {
-    p.life -= dt;
-    if (!p.ring) {
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.vx *= 1 - p.drag * dt;
-      p.vy *= 1 - p.drag * dt;
-    }
-  }
-  S.particles = S.particles.filter((p) => p.life > 0);
-  for (const p of S.popups) p.t += dt;
-  S.popups = S.popups.filter((p) => p.t < p.life);
-  for (const c of S.confetti) {
-    c.vy += 260 * dt;
-    c.vy = Math.min(c.vy, 260);
-    c.vx *= 1 - 0.8 * dt;
-    c.x += (c.vx + Math.sin(c.rot) * 30) * dt;
-    c.y += c.vy * dt;
-    c.rot += c.vr * dt;
-    if (c.y > S.view.h + 20) c.life = 0;
-    else if (c.y > S.view.h * 0.7) c.life -= dt;
-  }
-  S.confetti = S.confetti.filter((c) => c.life > 0);
+  tickMeter();
+  stepAnim(dt);
+  processQueue();
+  updateCamera(dt);
+  const wa = wind.dir + U.cam.rot;
+  $('#windArrow').style.transform = `rotate(${(wa * 180) / Math.PI}deg)`;
 }
 
-/* ---------- input ---------- */
+function render(dt) {
+  if (!G) return renderBackdrop(dt);
+  if (!hole) return;
+  const scene = {
+    view: view(),
+    wind,
+    time: U.time,
+    dt,
+    balls: [],
+    trails: [],
+    aim: null,
+    showSlope: false,
+  };
+  const multi = G.players.length > 1;
+  G.players.forEach((p, i) => {
+    if (U.anim && U.anim.p === i) return;
+    if (p.holed) return;
+    scene.balls.push({ x: p.ball.x, y: p.ball.y, z: 0, color: COLORS[i], label: multi && U.cam.scale < 6 ? p.name.slice(0, 1).toUpperCase() : null, ring: i === G.turn && isLocal(i) && U.phase === 'aim' });
+  });
+  if (U.anim) {
+    const f = U.anim.res.frames[U.anim.i];
+    scene.balls.push({ x: f.x, y: f.y, z: f.z, color: COLORS[U.anim.p] });
+    scene.trails.push(U.anim.trail);
+  }
+  const ball = currentBall();
+  if (U.screen === 'play' && U.phase === 'aim' && isLocal(G.turn)) {
+    const club = CLUBS[U.club];
+    scene.aim = {
+      x: ball.x, y: ball.y, dir: U.aim,
+      len: clubCarry(U.club, ball.lie),
+      ticks: [0.25, 0.5, 0.75],
+      ring: club.putter ? 0.3 : 2.5,
+    };
+  }
+  scene.showSlope = U.cam.scale > 7 && (ball.lie === T.GREEN || ball.lie === T.FRINGE || CLUBS[U.club].putter);
+  R.draw(scene);
+  drawPopups(dt);
+  drawMeter();
+}
 
+// Menus show a slowly turning view of a hole behind them.
+function renderBackdrop(dt) {
+  if (!hole) {
+    hole = buildHole(6, 3);
+    wind = windFor(6, 3);
+    R.setHole(hole);
+    const t = mapTarget();
+    U.cam = { ...t, scale: t.scale * 1.6 };
+  }
+  U.cam.rot += dt * 0.02;
+  const pin = hole.pin;
+  U.cam.x += (pin.x + 0 - U.cam.x) * 0.002;
+  U.cam.y += (pin.y + 60 - U.cam.y) * 0.002;
+  R.draw({ view: view(), wind, time: U.time, dt, balls: [], trails: [], aim: null, showSlope: false });
+}
+
+// ---------- online ----------
+
+function onNetMessage(msg) {
+  const o = U.online;
+  if (!o) return;
+  o.peerSeen = Date.now();
+  if (msg.name) o.peerName = msg.name;
+  updateNetPill();
+  switch (msg.t) {
+    case 'hello':
+      if (o.role === 'host') {
+        if (!G) {
+          const names = [store.get('name', 'Player 1'), msg.name || 'Player 2'];
+          G = newGame('online', names, [...Array(HOLES.length).keys()]);
+          save();
+          o.link.send({ t: 'start', game: G, name: store.get('name', 'Player 1') });
+          startPlay();
+        } else {
+          o.link.send({ t: 'start', game: G, name: store.get('name', 'Player 1') });
+        }
+      }
+      break;
+    case 'start':
+      if (o.role === 'guest') {
+        clearInterval(o.helloTimer);
+        const fresh = !G || G.seed !== msg.game.seed;
+        if (fresh || msg.game.n > G.n) {
+          G = msg.game;
+          save();
+          if (fresh) startPlay();
+          else resync();
+        }
+      }
+      break;
+    case 'shot':
+      U.queue.push(msg);
+      break;
+    case 'sync-req':
+      if (G) o.link.send({ t: 'sync', game: G });
+      break;
+    case 'sync':
+      if (G && msg.game.seed === G.seed && msg.game.n > G.n && !U.anim) {
+        G = msg.game;
+        save();
+        resync();
+      }
+      break;
+    case 'ping':
+      if (G && msg.n > G.n && !U.anim && !U.queue.length) o.link.send({ t: 'sync-req' });
+      break;
+    case 'bye':
+      popup(`${o.peerName || 'Your opponent'} left the game`, '#ffb3a6', 3, 22, true);
+      break;
+  }
+}
+
+function processQueue() {
+  if (!U.queue.length || U.anim || U.screen !== 'play') return;
+  if (U.phase !== 'wait' && U.phase !== 'aim') return;
+  const msg = U.queue.shift();
+  if (!G || msg.after.seed !== G.seed) return;
+  if (msg.n < G.n) return; // already applied
+  if (msg.n > G.n) {
+    // We missed something; jump straight to the sender's state.
+    G = msg.after;
+    save();
+    resync();
+    return;
+  }
+  const res = simulateShot(hole, G.players[msg.p].ball, msg.input, wind, shotSeed(G.seed, G.h, msg.p, G.n));
+  startAnim(msg.p, msg.input, res, msg.after);
+}
+
+function resync() {
+  if (G.done) return showFinal();
+  if (!hole || hole.index !== G.holes[G.h]) {
+    setScreen('play');
+    beginHole();
+  } else {
+    enterTurn();
+  }
+}
+
+function updateNetPill() {
+  const pill = $('#netPill');
+  const o = U.online;
+  if (!o) {
+    pill.hidden = true;
+    return;
+  }
+  pill.hidden = false;
+  const peerOk = o.peerSeen && Date.now() - o.peerSeen < 13000;
+  const up = o.status === 'online';
+  pill.dataset.state = !up ? 'bad' : peerOk ? 'ok' : 'warn';
+  pill.textContent = !up ? 'Reconnecting…' : peerOk ? `${o.peerName || 'Opponent'} connected` : `Waiting for ${o.peerName || 'opponent'}`;
+}
+
+async function goOnline(role, code) {
+  const status = (t) => ($('#lobbyStatus').textContent = t);
+  if (U.online) U.online.link.close();
+  const o = { role, code, status: 'connecting', peerSeen: 0, peerName: null };
+  U.online = o;
+  o.link = new Link(code, {
+    onMessage: onNetMessage,
+    onStatus: (s) => {
+      o.status = s;
+      updateNetPill();
+    },
+  });
+  status('Connecting…');
+  try {
+    await o.link.connect();
+  } catch (e) {
+    status(e.message || 'Could not connect.');
+    o.link.close();
+    U.online = null;
+    return false;
+  }
+  clearInterval(o.pingTimer);
+  o.pingTimer = setInterval(() => {
+    if (U.online !== o) return;
+    o.link.send({ t: 'ping', n: G ? G.n : -1, name: store.get('name', '') });
+    updateNetPill();
+  }, 4000);
+  return true;
+}
+
+async function hostGame() {
+  sound.click();
+  saveName();
+  const code = makeCode();
+  G = null;
+  U.local = [0];
+  $('#codeShow').textContent = code;
+  $('#hostBox').hidden = false;
+  if (await goOnline('host', code)) $('#lobbyStatus').textContent = 'Tell your friend this code, then wait here.';
+}
+
+async function joinGame() {
+  sound.click();
+  saveName();
+  const code = cleanCode($('#codeInput').value);
+  if (code.length !== 4) {
+    $('#lobbyStatus').textContent = 'Codes are 4 letters or numbers.';
+    return;
+  }
+  G = null;
+  U.local = [1];
+  if (!(await goOnline('guest', code))) return;
+  $('#lobbyStatus').textContent = `Joining game ${code}…`;
+  const o = U.online;
+  const hello = () => o.link.send({ t: 'hello', name: store.get('name', 'Player 2') });
+  hello();
+  o.helloTimer = setInterval(() => (G ? clearInterval(o.helloTimer) : hello()), 2000);
+}
+
+async function rejoin() {
+  const saved = store.get('online', null);
+  if (!saved) return;
+  sound.click();
+  G = saved.game;
+  U.local = [saved.role === 'host' ? 0 : 1];
+  setScreen('lobby');
+  $('#lobbyStatus').textContent = `Reconnecting to game ${saved.code}…`;
+  if (!(await goOnline(saved.role, saved.code))) return;
+  startPlay();
+  U.online.link.send({ t: 'sync-req', name: store.get('name', '') });
+  if (saved.role === 'guest') U.online.link.send({ t: 'hello', name: store.get('name', 'Player 2') });
+}
+
+function leaveOnline() {
+  if (!U.online) return;
+  U.online.link.send({ t: 'bye' });
+  clearInterval(U.online.pingTimer);
+  clearInterval(U.online.helloTimer);
+  const link = U.online.link;
+  setTimeout(() => link.close(), 300);
+  U.online = null;
+  updateNetPill();
+}
+
+function saveName() {
+  const n = $('#nameInput').value.trim().slice(0, 14);
+  if (n) store.set('name', n);
+}
+
+// ---------- starting games ----------
+
+function startPlay() {
+  U.anim = null;
+  U.queue = [];
+  U.lastPlayer = -1;
+  U.popups = [];
+  setScreen('play');
+  if (G.done) return showFinal();
+  beginHole();
+  save();
+}
+
+function startSolo(fromSave) {
+  sound.click();
+  leaveOnline();
+  U.local = [0];
+  const saved = fromSave ? store.get('solo', null) : null;
+  G = saved || newGame('solo', [store.get('name', 'You') || 'You'], [...Array(HOLES.length).keys()]);
+  startPlay();
+}
+
+function startHotseat() {
+  sound.click();
+  leaveOnline();
+  const a = $('#p1Input').value.trim().slice(0, 14) || 'Player 1';
+  const b = $('#p2Input').value.trim().slice(0, 14) || 'Player 2';
+  store.set('hotseat', [a, b]);
+  U.local = [0, 1];
+  G = newGame('hotseat', [a, b], [...Array(HOLES.length).keys()]);
+  startPlay();
+}
+
+function startPractice(i) {
+  sound.click();
+  leaveOnline();
+  U.local = [0];
+  G = newGame('practice', [store.get('name', 'You') || 'You'], [i]);
+  startPlay();
+}
+
+function toTitle() {
+  leaveOnline();
+  G = null;
+  hole = null;
+  U.anim = null;
+  setScreen('title');
+  refreshTitle();
+}
+
+function refreshTitle() {
+  const solo = store.get('solo', null);
+  $('#btnContinue').hidden = !solo;
+  if (solo) $('#btnContinue').textContent = `Continue round · Hole ${solo.h + 1}`;
+  const online = store.get('online', null);
+  $('#btnRejoin').hidden = !online;
+  if (online) $('#btnRejoin').textContent = `Rejoin online game ${online.code}`;
+  const best = store.get('bestRound', null);
+  const par = HOLES.reduce((a, h) => a + h.par, 0);
+  $('#bestLine').textContent = best == null ? `9 holes · Par ${par}` : `Best round ${best} (${fmtRel(best - par)})`;
+  $('#btnSound').textContent = sound.muted ? 'Sound off' : 'Sound on';
+}
+
+function showPracticeList() {
+  sound.click();
+  const grid = $('#holeGrid');
+  grid.innerHTML = '';
+  HOLES.forEach((h, i) => {
+    const b = document.createElement('button');
+    b.className = 'hole-tile';
+    b.id = `hole-${i + 1}`;
+    const yards = buildHole(i, 1).yards;
+    b.innerHTML = `<span class="num">${i + 1}</span><span class="nm"></span><span class="meta">Par ${h.par} · ${yards} yd</span>`;
+    b.querySelector('.nm').textContent = h.name;
+    b.addEventListener('click', () => startPractice(i));
+    grid.appendChild(b);
+  });
+  setScreen('practice');
+}
+
+// ---------- input ----------
+
+const canvas = $('#game');
 canvas.addEventListener('pointerdown', (e) => {
   sound.unlock();
-  if (S.mode !== 'play' || S.aim || S.finishing) return;
-  if (!S.world.canShoot() || S.hidden > 0) return;
-  S.aim = { id: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY };
-  try { canvas.setPointerCapture(e.pointerId); } catch {}
+  if (U.screen !== 'play' || U.phase !== 'aim' || U.swing.phase !== 'idle' || U.mapView) return;
+  U.dragging = { id: e.pointerId, camDir: U.aim };
+  aimAt(e.clientX, e.clientY);
+  try {
+    canvas.setPointerCapture(e.pointerId);
+  } catch {}
 });
-
 canvas.addEventListener('pointermove', (e) => {
-  if (!S.aim || e.pointerId !== S.aim.id) return;
-  S.aim.x = e.clientX;
-  S.aim.y = e.clientY;
+  if (!U.dragging || e.pointerId !== U.dragging.id) return;
+  aimAt(e.clientX, e.clientY);
+});
+const endDrag = (e) => {
+  if (U.dragging && e.pointerId === U.dragging.id) U.dragging = null;
+};
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+
+function aimAt(sx, sy) {
+  const [wx, wy] = R.toWorld(sx, sy);
+  const b = currentBall();
+  if (Math.hypot(wx - b.x, wy - b.y) < 0.5) return;
+  U.aim = Math.atan2(wy - b.y, wx - b.x);
+}
+
+// The swing responds on pointerdown for precise timing.
+$('#meterBox').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  sound.unlock();
+  swingTap(e.timeStamp);
 });
 
-canvas.addEventListener('pointerup', (e) => {
-  if (!S.aim || e.pointerId !== S.aim.id) return;
-  S.aim.x = e.clientX;
-  S.aim.y = e.clientY;
-  const info = aimInfo();
-  S.aim = null;
-  if (info.power >= 0.03 && S.mode === 'play') shoot(info);
-});
+function nudgeAim(dir) {
+  if (U.phase !== 'aim' || U.swing.phase !== 'idle') return;
+  const step = CLUBS[U.club].putter ? 0.0035 : 0.0025;
+  U.aim += dir * step;
+}
+for (const [id, d] of [['#aimLeft', -1], ['#aimRight', 1]]) {
+  const el = $(id);
+  let timer = null;
+  const stop = () => {
+    clearInterval(timer);
+    timer = null;
+  };
+  el.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    nudgeAim(d);
+    stop();
+    let n = 0;
+    timer = setInterval(() => nudgeAim(d * (++n > 12 ? 4 : 1)), 60);
+  });
+  el.addEventListener('pointerup', stop);
+  el.addEventListener('pointerleave', stop);
+  el.addEventListener('pointercancel', stop);
+}
 
-canvas.addEventListener('pointercancel', () => { S.aim = null; });
+function changeClub(d) {
+  if (U.phase !== 'aim' || U.swing.phase !== 'idle') return;
+  const lie = currentBall().lie;
+  let c = U.club;
+  for (let k = 0; k < CLUBS.length; k++) {
+    c = (c + d + CLUBS.length) % CLUBS.length;
+    if (c === 0 && lie !== T.TEE && lie !== T.FAIRWAY) continue; // driver only off tee or fairway
+    break;
+  }
+  U.club = c;
+  if (CLUBS[c].putter) U.puttScale = suggestPuttScale(toPin(hole, currentBall()));
+  sound.click();
+  updatePanel();
+}
+$('#clubPrev').addEventListener('click', () => changeClub(1));
+$('#clubNext').addEventListener('click', () => changeClub(-1));
+$('#rangeBtn').addEventListener('click', () => {
+  const i = PUTT_SCALES.indexOf(U.puttScale);
+  U.puttScale = PUTT_SCALES[(i + 1) % PUTT_SCALES.length];
+  sound.click();
+  updatePanel();
+});
+$('#mapBtn').addEventListener('click', () => {
+  U.mapView = !U.mapView;
+  $('#mapBtn').classList.toggle('on', U.mapView);
+  sound.click();
+});
 
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    if (S.mode === 'play') pause();
-    else if (S.mode === 'paused') { setMode('play'); }
-  }
-  if (e.key === 'r' && S.mode === 'play' && !S.finishing) loadHole(S.hole, 'play');
+  if (U.screen !== 'play') return;
+  if (e.target.tagName === 'INPUT') return;
+  if (e.code === 'Space') {
+    e.preventDefault();
+    swingTap(e.timeStamp);
+  } else if (e.key === 'ArrowLeft') nudgeAim(-1);
+  else if (e.key === 'ArrowRight') nudgeAim(1);
+  else if (e.key === 'ArrowUp') changeClub(-1);
+  else if (e.key === 'ArrowDown') changeClub(1);
+  else if (e.key === 'm') $('#mapBtn').click();
 });
 
-// Stop iOS pinch-zoom and double-tap zoom from hijacking the game.
+$('#pass').addEventListener('click', () => {
+  sound.unlock();
+  sound.click();
+  $('#pass').hidden = true;
+  U.phase = 'aim';
+  updatePanel();
+});
+
+// Stop iOS zoom gestures from hijacking the game.
 for (const ev of ['gesturestart', 'gesturechange', 'dblclick']) document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
-document.addEventListener('touchmove', (e) => { if (e.target === canvas) e.preventDefault(); }, { passive: false });
+document.addEventListener('touchmove', (e) => {
+  if (e.target === canvas) e.preventDefault();
+}, { passive: false });
 document.addEventListener('pointerdown', () => sound.unlock(), { capture: true });
 
-let resizeQueued = false;
-function onResize() {
-  if (resizeQueued) return;
-  resizeQueued = true;
+let rq = false;
+window.addEventListener('resize', () => {
+  if (rq) return;
+  rq = true;
   requestAnimationFrame(() => {
-    resizeQueued = false;
-    buildView();
+    rq = false;
+    resize();
   });
-}
-window.addEventListener('resize', onResize);
-window.addEventListener('orientationchange', () => setTimeout(onResize, 150));
+});
 
-/* ---------- buttons ---------- */
+// ---------- buttons ----------
 
 const on = (id, fn) => $(id).addEventListener('click', fn);
-on('#btnPlay', () => startRound(false));
-on('#btnContinue', () => startRound(true));
-on('#btnPractice', showPractice);
-on('#btnPracticeBack', () => { sound.click(); setMode('title'); });
+on('#btnSolo', () => startSolo(false));
+on('#btnContinue', () => startSolo(true));
+on('#btnRejoin', rejoin);
+on('#btnTwo', () => {
+  sound.click();
+  const names = store.get('hotseat', ['Player 1', 'Player 2']);
+  $('#p1Input').value = names[0];
+  $('#p2Input').value = names[1];
+  setScreen('setup');
+});
+on('#btnOnline', () => {
+  sound.click();
+  $('#nameInput').value = store.get('name', '');
+  $('#hostBox').hidden = true;
+  $('#lobbyStatus').textContent = 'Both iPads need an internet connection. Any Wi‑Fi works.';
+  setScreen('lobby');
+});
+on('#btnPractice', showPracticeList);
+on('#btnHelp', () => {
+  sound.click();
+  U.helpBack = U.screen;
+  setScreen('help');
+});
+on('#btnHelpBack', () => {
+  sound.click();
+  setScreen(U.helpBack || 'title');
+});
 on('#btnSound', () => {
   sound.unlock();
   sound.setMuted(!sound.muted);
@@ -1425,34 +1259,66 @@ on('#btnSound', () => {
   refreshTitle();
   sound.click();
 });
-on('#btnMenu', pause);
-on('#btnRestart', () => {
-  if (S.mode !== 'play' || S.finishing) return;
+on('#btnHost', hostGame);
+on('#btnJoin', joinGame);
+on('#btnLobbyBack', () => {
   sound.click();
-  loadHole(S.hole, 'play');
+  leaveOnline();
+  setScreen('title');
 });
-on('#btnResume', () => { sound.click(); setMode('play'); });
-on('#btnPauseRestart', () => { sound.click(); loadHole(S.hole, 'play'); });
+on('#btnSetupStart', startHotseat);
+on('#btnSetupBack', () => {
+  sound.click();
+  setScreen('title');
+});
+on('#btnPracticeBack', () => {
+  sound.click();
+  setScreen('title');
+});
+on('#menuBtn', () => {
+  if (U.screen !== 'play') return;
+  sound.click();
+  $('#pauseCard').innerHTML = scorecardHTML(G);
+  $('#btnPauseSound').textContent = sound.muted ? 'Sound: Off' : 'Sound: On';
+  setScreen('pause');
+});
+on('#btnResume', () => {
+  sound.click();
+  setScreen('play');
+});
+on('#btnPauseHelp', () => {
+  sound.click();
+  U.helpBack = 'pause';
+  setScreen('help');
+});
 on('#btnPauseSound', () => {
   sound.unlock();
   sound.setMuted(!sound.muted);
   store.set('muted', sound.muted);
   $('#btnPauseSound').textContent = sound.muted ? 'Sound: Off' : 'Sound: On';
-  sound.click();
 });
-on('#btnQuit', () => { sound.click(); toTitle(); });
-on('#btnNext', nextFromCard);
-on('#btnCardMenu', () => { sound.click(); showPractice(); });
-on('#btnAgain', () => startRound(false));
-on('#btnFinalMenu', () => { sound.click(); toTitle(); });
-
-/* ---------- boot ---------- */
+on('#btnQuit', () => {
+  sound.click();
+  toTitle();
+});
+on('#cardNext', nextFromCard);
+on('#cardMenu', showPracticeList);
+on('#btnFinalMenu', () => {
+  sound.click();
+  toTitle();
+});
+$('#codeInput').addEventListener('input', (e) => (e.target.value = cleanCode(e.target.value)));
 
 if ('serviceWorker' in navigator && window.top === window.self && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
-toTitle();
+// Test hook: lets automated checks inspect state. Harmless in normal play.
+window.__pl = { get G() { return G; }, get U() { return U; }, get hole() { return hole; }, enterTurn, showFinal, showCard, setBall: (x, y, lie) => { G.players[G.turn].ball = { x, y, lie }; enterTurn(); } };
+
+setScreen('title');
+refreshTitle();
+resize();
 requestAnimationFrame((t) => {
   last = t;
   requestAnimationFrame(frame);
