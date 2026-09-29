@@ -49,6 +49,7 @@
         <div id="clubName" class="club-name">Driver</div>
         <div id="clubInfo" class="club-info">250 yd carry</div>
         <button id="rangeBtn" class="mini-btn" hidden>Change range</button>
+        <button id="shapeBtn" class="mini-btn">Shot: Normal</button>
       </div>
       <button id="clubNext" class="icon-btn big" aria-label="Longer club">+</button>
     </div>
@@ -68,9 +69,17 @@
   <div class="info-box">
     <div class="stat"><small>To pin</small><b id="toPin">–</b></div>
     <div class="stat"><small>Lie</small><b id="lie">Tee</b></div>
-    <button id="mapBtn" class="mini-btn">Map</button>
+    <div class="btn-pair">
+      <button id="sideBtn" class="mini-btn">Side</button>
+      <button id="mapBtn" class="mini-btn">Map</button>
+    </div>
   </div>
 </footer>
+
+<div id="sideWrap" class="side-wrap" hidden>
+  <div class="side-head"><span>Side view</span><b id="sideStatus">No trees in the way</b></div>
+  <canvas id="side"></canvas>
+</div>
 
 <div id="pass" class="pass" hidden>
   <div class="panel">
@@ -207,6 +216,10 @@
       <div>
         <h3>Swing: three taps</h3>
         <p>Tap the meter to start. Tap again to set power: the numbers are yards. Past 100% you get extra distance but a tighter timing window. The marker then swings back: tap exactly on the white line. Early fades or slices right, late draws or hooks left.</p>
+      </div>
+      <div>
+        <h3>Trees and shot shape</h3>
+        <p>When trees are near your line, the side view shows the ball's flight at the power you're swinging (and faintly at 100%, 75% and 50%). Red means it hits a tree. Tap <b>Shot</b> to switch between Normal, Punch (stays under the branches and runs out) and High (climbs over trouble, shorter and harder to time). Tap <b>Side</b> to keep the view open.</p>
       </div>
       <div>
         <h3>Wind and lie</h3>

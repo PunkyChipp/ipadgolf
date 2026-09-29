@@ -289,7 +289,8 @@ function placeTrees(h, r, spec) {
   const maxY = Math.max(...h.path.map((p) => p.y)) + h.bounds + 30;
   const step = 8;
   const add = (x, y, big = 1) => {
-    h.trees.push({ x, y, r: (3.2 + r() * 3.2) * big, h: 11 + r() * 9, shade: r() });
+    // base: height of the lowest branches; a punch shot can run under them
+    h.trees.push({ x, y, r: (3.2 + r() * 3.2) * big, h: 11 + r() * 9, base: 2.6 + r() * 1.8, shade: r() });
   };
   const clearOf = (x, y) => {
     if (Math.hypot(x - h.tee.x, y - h.tee.y) < 22 || inEllipse(x, y, h.green, FRINGE_W + 7)) return false;
@@ -302,7 +303,7 @@ function placeTrees(h, r, spec) {
       const roll = r();
       const t = terrainAt(h, px, py);
       if (!clearOf(px, py)) continue;
-      if (t === T.DEEP && roll < density * 0.5) add(px, py);
+      if (t === T.DEEP && roll < density * 0.45) add(px, py);
       else if (t === T.OB && roll < 0.35) add(px, py, 1.15);
       else if (t === T.ROUGH && roll < density * 0.04) add(px, py);
     }
