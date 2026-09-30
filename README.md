@@ -51,6 +51,8 @@ The host picks how online games run:
 
 Every few seconds the iPads compare how many shots each player has taken. If one missed a shot (say, because it slept for a moment), it fetches the latest state from the others, so nobody gets stuck waiting.
 
+If an iPad says another player has a different version, everyone should close the game fully (swipe it away in the app switcher) and reopen it, then start a new game. This happens when one iPad still has an older copy of the game open.
+
 Online play relays small messages through free public MQTT servers (HiveMQ and EMQX, both at once for reliability) using a topic named after the game code. There's no account and no server of our own. Anyone who knew your code could see the shots, which is fine for a golf game.
 
 ## Putting it on your iPad

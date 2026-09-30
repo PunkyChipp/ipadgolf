@@ -23,6 +23,8 @@ function buildHole(i, seed) {
 const TAU = Math.PI * 2;
 const COLORS = ['#e8433a', '#2f7de1', '#f2b705', '#a45de0'];
 const MAX_ONLINE = 4;
+// Bump when online messages change, so mismatched copies of the game say so instead of stalling.
+const NET_VERSION = 3;
 const METER_MIN = -0.15;
 const METER_MAX = 1.1;
 const DIFFICULTY = { casual: 1.5, standard: 1, pro: 0.72 };
@@ -1231,6 +1233,7 @@ function onNetMessage(msg) {
   const o = U.online;
   if (!o) return;
   if (msg.to && msg.to !== deviceId()) return;
+  if (msg.pv !== NET_VERSION) return warnVersion(msg);
   if (msg.from) {
     const peer = o.peers.get(msg.from) || {};
     peer.seen = Date.now();
@@ -1315,6 +1318,16 @@ function onNetMessage(msg) {
       break;
     }
   }
+}
+
+function warnVersion(msg) {
+  const now = Date.now();
+  if (now - (U.versionWarned || 0) < 8000) return;
+  U.versionWarned = now;
+  const who = msg.name || 'Someone';
+  const text = `${who} has a different version of the game. Everyone should close the game fully, reopen it and start a new game.`;
+  if (U.screen === 'lobby') $('#lobbyStatus').textContent = text;
+  else popup(`${who} needs to update: close and reopen the game`, '#ffb3a6', 4, 20, true);
 }
 
 function sendRoster() {
@@ -1440,6 +1453,7 @@ async function goOnline(role, code) {
   U.online = o;
   o.link = new Link(code, {
     id: deviceId(),
+    version: NET_VERSION,
     onMessage: onNetMessage,
     onStatus: (s) => {
       o.status = s;
