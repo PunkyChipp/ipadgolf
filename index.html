@@ -118,7 +118,10 @@
         <button id="btnHelp" class="btn">How to play</button>
       </div>
     </div>
-    <button id="btnSound" class="link-btn">Sound on</button>
+    <div class="link-row">
+      <button id="btnDiff" class="link-btn">Timing: Standard</button>
+      <button id="btnSound" class="link-btn">Sound on</button>
+    </div>
   </div>
 </section>
 
@@ -133,6 +136,10 @@
     <div class="lobby-grid">
       <div class="lobby-col">
         <h3>Host</h3>
+        <div class="seg" role="group" aria-label="Play order">
+          <button id="modeSimul" class="seg-btn on" aria-pressed="true">Same time</button>
+          <button id="modeTurns" class="seg-btn" aria-pressed="false">Take turns</button>
+        </div>
         <button id="btnHost" class="btn primary">Create game</button>
         <div id="hostBox" class="host-box" hidden>
           <small>Game code</small>
@@ -218,7 +225,7 @@
       </div>
       <div>
         <h3>Swing: three taps</h3>
-        <p>Tap the meter to start. Tap again to set power: the numbers are yards. Past 100% you get extra distance but a tighter timing window. The marker then swings back: tap exactly on the white line. Early fades or slices right, late draws or hooks left.</p>
+        <p>Tap the meter to start. Tap again to set power: the numbers are yards. Past 100% you get extra distance but a tighter timing window. The marker then swings back: tap exactly on the white line. Just off the line gives a gentle fade (early) or draw (late). Further off, the shaded zones, and it becomes a slice or a hook that can curve 20 to 40 yards. Only a really bad miss is a duff or a shank.</p>
       </div>
       <div>
         <h3>Trees and shot shape</h3>
@@ -226,7 +233,7 @@
       </div>
       <div>
         <h3>Spin</h3>
-        <p>Tap or drag on the little ball where you want to strike it. Low is backspin: the ball stops quickly, and a wedge onto a green can zip back. High is topspin: lower flight, more roll. Left or right curves the ball (a draw or a fade), and the aim line bends to show it. Spin makes the timing window a little tighter. Double-tap the ball to clear it.</p>
+        <p>Tap or drag on the little ball where you want to strike it. This is how you shape shots on purpose: a full side strike bends a mid iron around 25 yards. Low is backspin: the ball stops quickly, and a wedge onto a green can zip back. High is topspin: lower flight, more roll. Left or right curves the ball (a draw or a fade), and the aim line bends to show it. Spin makes the timing window a little tighter. Double-tap the ball to clear it.</p>
       </div>
       <div>
         <h3>Wind and lie</h3>
@@ -242,7 +249,11 @@
       </div>
       <div>
         <h3>Two players</h3>
-        <p>Whoever is furthest from the hole plays next. The lowest score on the last hole tees off first. On two iPads, both need internet, but they can be on different Wi‑Fi.</p>
+        <p>On one iPad, whoever is furthest from the hole plays next, and the lowest score on the last hole tees off first. On two iPads (both need internet, any Wi‑Fi), the host picks <b>Same time</b>, where you both play your own ball without waiting and the next hole starts when you've both holed out, or <b>Take turns</b> like real golf.</p>
+      </div>
+      <div>
+        <h3>View and difficulty</h3>
+        <p>Pinch to zoom the course (or use + and − on a keyboard). <b>Timing</b> on the title screen sets how wide the swing window is: Casual, Standard or Pro. Your round ends with stats: fairways hit, greens in regulation and putts.</p>
       </div>
     </div>
     <button id="btnHelpBack" class="btn primary">Got it</button>

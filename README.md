@@ -10,14 +10,17 @@ No build step and no dependencies: plain HTML, CSS and JavaScript modules.
 - **Swing:** three taps on the meter.
   1. Tap to start.
   2. Tap to set power. The numbers are yards; past 100% is extra distance with a tighter timing window.
-  3. Tap on the white line as the marker comes back. Early fades or slices right, late draws or hooks left. Miss badly and you shank or duff it.
+  3. Tap on the white line as the marker comes back. Just early gives a gentle fade, just late a draw. Further off (the shaded zones) gives a slice or hook that can bend 20 to 40 yards. Only a really bad miss duffs or shanks it.
+- **Timing difficulty:** *Timing* on the title screen switches between Casual (a wider window), Standard and Pro.
 - **Shot shape:** tap *Shot* to switch between Normal, **Punch** (flies about head high under the branches and runs out, for getting out of trees) and **High** (climbs over trouble, shorter and harder to time).
-- **Spin:** tap or drag on the little ball where you want to strike it. Low is backspin (stops fast; a wedge onto a green can zip back), high is topspin (lower flight, more roll), and left or right draws or fades the ball, with the aim line bending to match. Spin narrows the timing window slightly. Double-tap the ball to clear it.
+- **Spin:** tap or drag on the little ball where you want to strike it. Low is backspin (stops fast; a wedge onto a green can zip back), high is topspin (lower flight, more roll), and left or right draws or fades the ball on purpose (a full side strike bends a mid iron about 25 yards), with the aim line bending to match. Spin narrows the timing window slightly. Double-tap the ball to clear it.
 - **Side view:** when trees are near your line, a side-on view shows the flight at the power you're swinging, plus faint arcs at 100%, 75% and 50%. It says whether the shot clears, may clip a tree (amber) or hits one (red), and the aim line turns red too. Tap *Side* to keep it open.
 - **Trees:** trunks stop low balls and canopies stop balls between the lowest branches and the treetop. A ball that only catches the edge of a canopy gets through about half the time.
 - **Wind** (arrow at the top, and the flag) pushes the ball sideways and changes carry.
 - **Lies:** rough, deep rough and bunkers cost distance and shrink the timing window. Only wedges play well from sand. The driver can only be hit from the tee or the fairway.
 - **Putting:** on the green, the moving dashes flow downhill. Two taps: start, then set the pace (the meter shows feet). Use "Change range" for long putts.
+- **Zoom:** pinch the course, or use + and − on a keyboard.
+- **Stats:** the final scorecard adds fairways hit, greens in regulation and putts.
 - **Penalties:** water is one stroke and a drop behind the hazard. Out of bounds (past the white stakes) is one stroke and a replay from the same spot. A hole ends at par + 5.
 
 ## The course (par 36)
@@ -41,7 +44,12 @@ Pin positions and wind change every game.
 - **One iPad:** take turns; the game asks you to pass the iPad when the player changes.
 - **Two iPads:** one player taps *Create game* and reads out the 4-letter code; the other enters it and taps *Join game*. The iPads can be on different Wi-Fi networks or on mobile data; they just need internet. If an iPad reloads or drops out, tap *Rejoin online game* on the title screen.
 
-Normal golf order applies: whoever is furthest from the hole plays next, and the lowest score on the last hole tees off first.
+The host picks how online games run:
+
+- **Same time** (default): you each play your own ball without waiting. You see the other player's shots as they happen, and the next hole starts when you've both holed out.
+- **Take turns:** normal golf order. Everyone tees off in honour order (lowest score on the last hole first), then whoever is furthest from the hole plays.
+
+Same-iPad games always take turns.
 
 Online play relays small messages through free public MQTT servers (HiveMQ and EMQX, both at once for reliability) using a topic named after the game code. There's no account and no server of our own. Anyone who knew your code could see the shots, which is fine for a golf game.
 
