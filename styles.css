@@ -405,6 +405,31 @@ h3 { font-size: 22px; }
   text-underline-offset: 3px;
 }
 
+.link-row { display: flex; justify-content: center; gap: 4px; flex-wrap: wrap; }
+
+/* segmented choice */
+.seg {
+  display: flex;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 3px;
+  gap: 3px;
+  margin-bottom: 10px;
+}
+.seg-btn {
+  flex: 1;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 800;
+  font-size: 14px;
+  padding: 9px 6px;
+}
+.seg-btn.on { background: #fff; color: #1f4d2c; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18); }
+
 /* forms */
 .field { display: flex; flex-direction: column; gap: 6px; width: 100%; text-align: left; }
 .field span { font-size: 12px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
@@ -489,6 +514,7 @@ input {
 .scorecard thead th { background: #1f4d2c; color: #f4f1e4; }
 .scorecard tbody th { text-align: left; padding-left: 12px; white-space: nowrap; }
 .scorecard tbody th .dot { margin-right: 6px; vertical-align: -1px; }
+.scorecard.stats { min-width: 0; margin-top: 10px; }
 .scorecard .par-row th, .scorecard .par-row td { color: #4b6650; font-size: 13px; }
 .scorecard tbody tr + tr { border-top: 1px solid rgba(30, 51, 34, 0.15); }
 .scorecard .tot { font-family: var(--display); font-weight: 400; font-size: 18px; }

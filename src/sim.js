@@ -67,12 +67,26 @@ export function meterWindow(lie, club, power, shape = 0, spinMag = 0) {
   return Math.max(0.012, w);
 }
 
+// Timing error e is in accuracy-window units: inside +-1 is a good strike.
+// Missing the window mostly bends the ball (hooks and slices); only a swing
+// that is wildly off becomes a shank or a duff.
+export const MISHIT = 2.2;
+
 export function shotLabel(e) {
   const a = Math.abs(e);
   if (a <= 0.22) return 'Perfect';
-  if (a > 1) return e > 0 ? 'Shank' : 'Duff';
   if (a <= 0.55) return e > 0 ? 'Fade' : 'Draw';
-  return e > 0 ? 'Slice' : 'Hook';
+  if (a <= 1.1) return e > 0 ? 'Slice' : 'Hook';
+  if (a <= MISHIT) return e > 0 ? 'Big slice' : 'Snap hook';
+  return e > 0 ? 'Shank' : 'Duff';
+}
+
+// Sideways curve as a fraction of carry for a timing error.
+function timingCurve(e) {
+  const a = Math.abs(e);
+  if (a > MISHIT) return Math.sign(e) * (e > 0 ? 0.33 : 0.05);
+  const c = a <= 1 ? a * 0.12 : 0.12 + (a - 1) * 0.14;
+  return Math.sign(e) * c;
 }
 
 const dirOf = (a) => [Math.cos(a), Math.sin(a)];
@@ -277,15 +291,15 @@ export function flightParams(ball, input, wind, r = () => 0.5) {
   const shape = SHAPES[input.shape || 0];
   const lie = lieEffect(ball.lie, input.club);
   const e = input.acc || 0;
-  const mishit = Math.abs(e) > 1;
+  const mishit = Math.abs(e) > MISHIT;
   const p = input.power;
   const powerDist = p <= 1 ? p : 1 + (p - 1) * 0.8;
   const spin = input.spin || { x: 0, y: 0 };
   const top = Math.max(0, spin.y), back = Math.max(0, -spin.y);
   let carry = club.carry * shape.carry * powerDist * lie.dist * (1 + (r() - 0.5) * 2 * lie.spread);
   carry *= 1 - 0.05 * Math.min(1, Math.hypot(spin.x, spin.y));
-  if (mishit) carry *= 0.55;
-  else carry *= 1 - Math.max(0, Math.abs(e) - 0.22) * 0.06;
+  if (mishit) carry *= e > 0 ? 0.55 : 0.35;
+  else carry *= 1 - Math.min(0.1, Math.max(0, Math.abs(e) - 0.22) * 0.05);
   const flight = club.time * shape.time * (0.45 + 0.55 * Math.min(1, p));
   let apex = club.apex * shape.apex * (0.4 + 0.6 * Math.min(1, p)) * (mishit && e < 0 ? 0.35 : 1);
   apex *= (1 - 0.25 * top) * (1 + 0.12 * back);
@@ -301,9 +315,9 @@ export function flightParams(ball, input, wind, r = () => 0.5) {
     carry, flight, apex, mishit, shape, dx, dy, rx, ry,
     drift: cross * 0.3 * flight * (apex / 30),
     // side spin bends the ball on purpose; timing errors add to it
-    curve: ((mishit ? Math.sign(e) * 0.25 : e * 0.11) + spin.x * 0.07) * carry,
+    curve: (timingCurve(e) + spin.x * 0.17) * carry,
     spin, top, back,
-    push: e * 0.02, // start line a touch off with mistimed swings
+    push: Math.max(-0.05, Math.min(0.05, e * 0.018)), // start line a touch off with mistimed swings
   };
 }
 

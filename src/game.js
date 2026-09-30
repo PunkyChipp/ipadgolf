@@ -1,16 +1,30 @@
-import { buildHole, windFor, HOLES, T, TERRAIN_NAMES } from './course.js';
+import { buildHole as buildHoleRaw, windFor, HOLES, T, TERRAIN_NAMES } from './course.js';
 import {
-  simulateShot, CLUBS, PUTTER, PUTT_SCALES, SHAPES, meterWindow, lieEffect, suggestClub, suggestPuttScale, shotSeed, shotLabel, previewShot, flightParams, flightPoint,
+  simulateShot, CLUBS, PUTTER, PUTT_SCALES, SHAPES, MISHIT, meterWindow, lieEffect, suggestClub, suggestPuttScale, shotSeed, shotLabel, previewShot, flightParams, flightPoint,
 } from './sim.js';
 import { Renderer } from './render.js';
 import { Sound } from './audio.js';
 import { Link, makeCode, cleanCode } from './net.js';
 
 const $ = (s) => document.querySelector(s);
+
+// Building a hole places its trees, which is slow, so each layout is built once.
+const holeCache = new Map();
+function buildHole(i, seed) {
+  const key = i + '|' + seed;
+  let h = holeCache.get(key);
+  if (!h) {
+    if (holeCache.size > 24) holeCache.clear();
+    h = buildHoleRaw(i, seed);
+    holeCache.set(key, h);
+  }
+  return h;
+}
 const TAU = Math.PI * 2;
 const COLORS = ['#e8433a', '#2f7de1'];
 const METER_MIN = -0.15;
 const METER_MAX = 1.1;
+const DIFFICULTY = { casual: 1.5, standard: 1, pro: 0.72 };
 
 const store = {
   get(k, d) {
@@ -35,41 +49,98 @@ const meterCv = $('#meter');
 const mctx = meterCv.getContext('2d');
 
 // ---------- shared game state (plain data, sent between devices) ----------
+//
+// Each player owns their own ball, stroke count and shot counter. Only that
+// player's shots change their entry, so two devices can merge each other's
+// shots in any order. That is what makes "play at the same time" work.
 
 let G = null; // the game
-let hole = null; // built hole for G
+let hole = null; // built hole for the current hole index
 let wind = null;
 
-function newGame(mode, names, holes, seed = (Math.random() * 2 ** 31) >>> 0) {
-  const g = { v: 1, mode, seed, holes, h: 0, n: 0, turn: 0, order: names.map((_, i) => i), done: false, last: null,
-    players: names.map((name) => ({ name, scores: [], strokes: 0, ball: null, holed: false, picked: false })) };
-  startHole(g);
+function newGame(mode, names, holes, { simul = false, seed = (Math.random() * 2 ** 31) >>> 0 } = {}) {
+  const g = {
+    v: 2, mode, simul, seed, holes, h: 0, n: 0, turn: 0, done: false, last: null,
+    players: names.map((name) => ({ name, h: 0, shots: 0, strokes: 0, ball: null, holed: false, picked: false, scores: [], stats: [], cur: null })),
+  };
+  g.players.forEach((p, i) => resetForHole(g, i));
+  computeTurn(g);
   return g;
 }
 
-function startHole(g) {
-  const hl = buildHole(g.holes[g.h], g.seed);
+function teeSpot(g, hl, i) {
   const t = hl.tee;
-  g.players.forEach((p, i) => {
-    const off = g.players.length > 1 ? (i === 0 ? -1.6 : 1.6) : 0;
-    p.ball = { x: t.x + Math.cos(t.ang + Math.PI / 2) * off, y: t.y + Math.sin(t.ang + Math.PI / 2) * off, lie: T.TEE };
-    p.strokes = 0;
-    p.holed = false;
-    p.picked = false;
-  });
-  g.turn = g.order[0];
+  const off = g.players.length > 1 ? (i === 0 ? -1.6 : 1.6) : 0;
+  return { x: t.x + Math.cos(t.ang + Math.PI / 2) * off, y: t.y + Math.sin(t.ang + Math.PI / 2) * off, lie: T.TEE };
+}
+
+function resetForHole(g, i) {
+  const pl = g.players[i];
+  if (pl.h >= g.holes.length) return;
+  const hl = buildHole(g.holes[pl.h], g.seed);
+  pl.ball = teeSpot(g, hl, i);
+  pl.strokes = 0;
+  pl.holed = false;
+  pl.picked = false;
+  pl.cur = { putts: 0, fir: null, gir: false };
 }
 
 function toPin(hl, ball) {
   return Math.hypot(hl.pin.x - ball.x, hl.pin.y - ball.y);
 }
 
+// Move everyone on to the next hole once all players have finished this one.
+function settle(g) {
+  for (;;) {
+    const h = Math.min(...g.players.map((p) => p.h));
+    if (h >= g.holes.length) break;
+    const behind = g.players.filter((p) => p.h === h);
+    if (!behind.every((p) => p.holed)) break;
+    g.last = { h, hole: g.holes[h], results: g.players.map((p) => p.scores[h] ?? p.strokes), picked: g.players.map((p) => (p.h === h ? p.picked : false)) };
+    g.players.forEach((p, i) => {
+      if (p.h !== h) return;
+      p.scores[h] = p.strokes;
+      p.stats[h] = p.cur;
+      p.h++;
+      resetForHole(g, i);
+    });
+  }
+  g.h = Math.min(...g.players.map((p) => p.h));
+  g.done = g.h >= g.holes.length;
+}
+
+// Turn order when taking turns: furthest from the hole plays; on the tee the
+// best score on the previous hole goes first.
+function computeTurn(g) {
+  if (g.done) return;
+  const hl = buildHole(g.holes[g.h], g.seed);
+  const prev = g.h - 1;
+  const honour = g.players.map((_, i) => i).sort((a, b) => (prev >= 0 ? (g.players[a].scores[prev] ?? 0) - (g.players[b].scores[prev] ?? 0) : 0) || a - b);
+  const left = honour.filter((i) => !g.players[i].holed);
+  if (!left.length) return;
+  // Everyone tees off in honour order, then whoever is furthest away plays.
+  const onTee = left.filter((i) => g.players[i].strokes === 0);
+  if (onTee.length) {
+    g.turn = onTee[0];
+    return;
+  }
+  left.sort((a, b) => toPin(hl, g.players[b].ball) - toPin(hl, g.players[a].ball) || honour.indexOf(a) - honour.indexOf(b));
+  g.turn = left[0];
+}
+
 // Apply a finished shot to a copy of the game and return it.
-function applyShot(g0, hl, p, res) {
+function applyShot(g0, p, input, res) {
   const g = JSON.parse(JSON.stringify(g0));
   const pl = g.players[p];
+  const hl = buildHole(g.holes[pl.h], g.seed);
+  const startLie = pl.ball.lie;
   pl.strokes += 1 + res.penalty;
+  pl.shots++;
   pl.ball = res.final;
+  const cur = pl.cur || (pl.cur = { putts: 0, fir: null, gir: false });
+  if (CLUBS[input.club].putter && (startLie === T.GREEN || startLie === T.FRINGE)) cur.putts++;
+  if (pl.strokes === 1 + res.penalty && hl.par > 3 && cur.fir === null) cur.fir = res.final.lie === T.FAIRWAY && !res.penalty;
+  if ((res.final.lie === T.GREEN || res.outcome === 'holed') && pl.strokes <= hl.par - 2) cur.gir = true;
   if (res.outcome === 'holed') pl.holed = true;
   else if (pl.strokes >= hl.par + 5) {
     pl.holed = true;
@@ -77,21 +148,8 @@ function applyShot(g0, hl, p, res) {
     pl.strokes = hl.par + 5;
   }
   g.n++;
-  const left = g.players.map((x, i) => i).filter((i) => !g.players[i].holed);
-  if (!left.length) {
-    // Hole finished: record scores, set the honour for the next tee.
-    const results = g.players.map((x) => x.strokes);
-    g.players.forEach((x) => x.scores.push(x.strokes));
-    g.last = { h: g.h, hole: g.holes[g.h], results, picked: g.players.map((x) => x.picked) };
-    g.order = [...g.order].sort((a, b) => results[a] - results[b]);
-    g.h++;
-    if (g.h >= g.holes.length) g.done = true;
-    else startHole(g);
-    return g;
-  }
-  // Furthest from the hole plays next; ties go to the honour order.
-  left.sort((a, b) => toPin(hl, g.players[b].ball) - toPin(hl, g.players[a].ball) || g.order.indexOf(a) - g.order.indexOf(b));
-  g.turn = left[0];
+  settle(g);
+  computeTurn(g);
   return g;
 }
 
@@ -107,18 +165,21 @@ const U = {
   spin: { x: 0, y: 0 },
   sidePinned: false,
   aim: 0,
+  aimFor: '',
   puttScale: 10,
   swing: { phase: 'idle' },
-  anim: null,
+  anims: [],
   queue: [],
   cam: { x: 0, y: 0, rot: 0, scale: 2 },
-  camT: null,
+  zoom: 1,
   mapView: false,
   dragging: null,
+  pinch: null,
   introT: 0,
   popups: [],
   time: 0,
   lastPlayer: -1,
+  pendingCard: false,
 };
 
 // ---------- helpers ----------
@@ -140,8 +201,31 @@ function isLocal(p) {
   return U.local.includes(p);
 }
 
+// The player this device is looking after right now.
+function me() {
+  if (!G) return 0;
+  if (G.simul) return U.local[0];
+  return G.turn;
+}
+
 function currentBall() {
-  return G.players[G.turn].ball;
+  return G.players[me()].ball;
+}
+
+function animFor(p) {
+  return U.anims.find((a) => a.p === p);
+}
+
+function canAct(p) {
+  if (!G || G.done || U.screen !== 'play' || U.phase === 'intro' || U.pendingCard) return false;
+  const pl = G.players[p];
+  if (!isLocal(p) || pl.holed || pl.h !== G.h || animFor(p)) return false;
+  if (!G.simul && (G.turn !== p || U.anims.length)) return false;
+  return true;
+}
+
+function difficulty() {
+  return DIFFICULTY[store.get('difficulty', 'standard')] || 1;
 }
 
 function spinMag() {
@@ -154,7 +238,7 @@ function spinName(sp) {
   if (v && h) return `${v} + ${h}`;
   if (v) return v;
   if (h) return h[0].toUpperCase() + h.slice(1);
-  return 'No spin';
+  return 'Straight';
 }
 
 function clubCarry(ci, lie) {
@@ -196,31 +280,33 @@ function mapTarget() {
     x0 = Math.min(x0, u); x1 = Math.max(x1, u); y0 = Math.min(y0, v); y1 = Math.max(y1, v);
   }
   const vp = viewport();
-  const scale = Math.min(vp.vw / (x1 - x0 + 90), vp.vh / (y1 - y0 + 50));
+  const scale = Math.min(vp.vw / (x1 - x0 + 90), vp.vh / (y1 - y0 + 50)) * U.zoom;
   const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
-  // back-rotate the midpoint into world space
   return { x: mx * c + my * s, y: -mx * s + my * c, rot, scale };
 }
 
 function aimTarget(ball, dir, span, lateral) {
   const vp = viewport();
   const rot = -Math.PI / 2 - dir;
-  const scale = Math.max(0.8, Math.min(70, Math.min(vp.vh / (span * 1.28 + 6), vp.vw / Math.max(lateral, 12))));
+  const scale = Math.max(0.8, Math.min(90, Math.min(vp.vh / (span * 1.28 + 6), vp.vw / Math.max(lateral, 12)) * U.zoom));
   const fwd = span * 0.44;
   return { x: ball.x + Math.cos(dir) * fwd, y: ball.y + Math.sin(dir) * fwd, rot, scale };
 }
 
 function cameraTarget() {
   if (U.mapView || U.phase === 'intro') return mapTarget();
-  const p = G.players[G.turn];
-  const ball = p.ball;
-  if (U.phase === 'flight' && U.anim) {
-    const f = U.anim.res.frames[Math.min(U.anim.i, U.anim.res.frames.length - 1)];
-    const base = U.anim.view;
+  const p = me();
+  // Follow a shot in the air: ours first, otherwise the one being watched.
+  const a = animFor(p) || (!G.simul ? U.anims[0] : null) || (G.players[p].holed ? U.anims[0] : null);
+  if (a) {
+    const f = a.res.frames[Math.min(a.i, a.res.frames.length - 1)];
+    const base = a.view;
     return { x: base.x + (f.x - base.bx) * 0.9, y: base.y + (f.y - base.by) * 0.9, rot: base.rot, scale: base.scale };
   }
+  const watch = G.players[p].holed && G.simul ? G.players.findIndex((q) => !q.holed) : p;
+  const ball = G.players[watch >= 0 ? watch : p].ball;
   const dist = toPin(hole, ball);
-  if (U.phase === 'aim' || U.phase === 'pass') {
+  if ((U.phase === 'aim' || U.phase === 'pass') && watch === p) {
     const dir = U.dragging ? U.dragging.camDir : U.aim;
     const len = CLUBS[U.club].putter ? Math.max(U.puttScale, dist) : clubCarry(U.club, ball.lie) * 1.05;
     const span = Math.max(len, CLUBS[U.club].putter ? 5 : 20);
@@ -241,7 +327,7 @@ function angDiff(a, b) {
 
 function updateCamera(dt, snap = false) {
   const t = cameraTarget();
-  const k = snap ? 1 : 1 - Math.exp(-dt * (U.phase === 'flight' ? 5 : 3.2));
+  const k = snap ? 1 : 1 - Math.exp(-dt * (U.anims.length ? 5 : 3.2));
   const c = U.cam;
   c.x += (t.x - c.x) * k;
   c.y += (t.y - c.y) * k;
@@ -268,6 +354,9 @@ function beginHole() {
   U.phase = 'intro';
   U.introT = 1.9;
   U.mapView = false;
+  U.zoom = 1;
+  U.aimFor = '';
+  U.pendingCard = false;
   const b = $('#banner');
   b.innerHTML = `<small>Hole ${G.h + 1} of ${G.holes.length}</small><strong></strong><span>Par ${hole.par} · ${hole.yards} yards · Wind ${wind.speed} mph</span>`;
   b.querySelector('strong').textContent = hole.name;
@@ -278,29 +367,39 @@ function beginHole() {
   updatePanel();
 }
 
-function enterTurn() {
-  const p = G.turn;
+// Work out what this device should be doing now.
+function refreshPhase() {
+  if (!G || U.screen !== 'play' || U.phase === 'intro' || U.phase === 'pass') return;
+  const p = me();
   const pl = G.players[p];
-  U.swing = { phase: 'idle' };
-  U.mapView = false;
-  if (isLocal(p)) {
-    const ball = pl.ball;
-    const dist = toPin(hole, ball);
-    U.club = suggestClub(dist, ball.lie);
-    U.shape = 0;
-    U.spin = { x: 0, y: 0 };
-    U.puttScale = suggestPuttScale(dist);
-    U.aim = defaultAim(ball, U.club);
-    const needPass = G.mode === 'hotseat' && U.lastPlayer !== -1 && U.lastPlayer !== p;
-    U.phase = needPass ? 'pass' : 'aim';
-    if (needPass) {
-      $('#passName').textContent = pl.name;
-      $('#passName').style.color = COLORS[p];
-      $('#pass').hidden = false;
+  if (canAct(p)) {
+    const key = `${p}:${pl.shots}`;
+    if (U.aimFor !== key) {
+      U.aimFor = key;
+      const ball = pl.ball;
+      const dist = toPin(hole, ball);
+      U.club = suggestClub(dist, ball.lie);
+      U.shape = 0;
+      U.spin = { x: 0, y: 0 };
+      U.zoom = 1;
+      U.swing = { phase: 'idle' };
+      U.puttScale = suggestPuttScale(dist);
+      U.aim = defaultAim(ball, U.club);
+      const needPass = G.mode === 'hotseat' && U.lastPlayer !== -1 && U.lastPlayer !== p;
+      U.lastPlayer = p;
+      if (needPass) {
+        U.phase = 'pass';
+        $('#passName').textContent = pl.name;
+        $('#passName').style.color = COLORS[p];
+        $('#pass').hidden = false;
+        updatePanel();
+        updateHud();
+        return;
+      }
     }
-    U.lastPlayer = p;
+    U.phase = 'aim';
   } else {
-    U.phase = 'wait';
+    U.phase = animFor(p) || (!G.simul && U.anims.length) ? 'flight' : 'wait';
   }
   updatePanel();
   updateHud();
@@ -318,38 +417,42 @@ function defaultAim(ball, ci) {
 }
 
 function takeShot(power, acc) {
-  const p = G.turn;
-  const ball = G.players[p].ball;
+  const p = me();
+  const pl = G.players[p];
   const putter = CLUBS[U.club].putter;
   const input = { club: U.club, aim: U.aim, power, acc, puttScale: U.puttScale, shape: putter ? 0 : U.shape, spin: putter ? { x: 0, y: 0 } : { ...U.spin } };
-  const res = simulateShot(hole, ball, input, wind, shotSeed(G.seed, G.h, p, G.n));
-  const after = applyShot(G, hole, p, res);
-  if (U.online) U.online.link.send({ t: 'shot', n: G.n, p, input, after });
-  startAnim(p, input, res, after);
+  const res = simulateShot(hole, pl.ball, input, wind, shotSeed(G.seed, pl.h, p, pl.shots));
+  if (U.online) U.online.link.send({ t: 'shot', p, k: pl.shots, h: pl.h, input, name: pl.name });
+  U.swing = { phase: 'idle' };
+  startAnim(p, input, res);
 }
 
-function startAnim(p, input, res, after) {
+function startAnim(p, input, res) {
   const ball = G.players[p].ball;
   const club = CLUBS[input.club];
-  const t = cameraTarget();
-  U.anim = { p, input, res, after, t: 0, i: 0, fired: 0, hold: 0, view: { ...U.cam, bx: ball.x, by: ball.y }, trail: [] };
-  if (U.phase !== 'aim') U.anim.view = { ...t, bx: ball.x, by: ball.y };
-  U.phase = 'flight';
-  U.swing = { phase: 'idle' };
+  const mine = isLocal(p);
+  const a = { p, input, res, k: G.players[p].shots, t: 0, i: 0, hold: 0, trail: [], view: { ...U.cam, bx: ball.x, by: ball.y } };
+  if (!mine || U.phase !== 'aim') a.view = { ...cameraTarget(), bx: ball.x, by: ball.y };
+  U.anims.push(a);
+  const who = G.players.length > 1 && (G.simul || !mine) ? `${G.players[p].name}: ` : '';
   if (club.putter) sound.putt();
   else {
     const e = input.acc;
-    sound.strike(club.carry > 200 ? 'wood' : 'iron', Math.abs(e) <= 0.22 ? 'perfect' : Math.abs(e) > 1 ? 'bad' : 'ok');
-    popup(shotLabel(e), Math.abs(e) <= 0.22 ? '#ffe27a' : Math.abs(e) > 1 ? '#ff9a8a' : '#ffffff', 1.3, 30);
+    const ae = Math.abs(e);
+    sound.strike(club.carry > 200 ? 'wood' : 'iron', ae <= 0.22 ? 'perfect' : ae > 1.1 ? 'bad' : 'ok');
+    popup(who + shotLabel(e), ae <= 0.22 ? '#ffe27a' : ae > MISHIT ? '#ff9a8a' : ae > 0.55 ? '#ffc9a8' : '#ffffff', 1.3, who ? 24 : 30);
+    if (ae <= 0.22 && mine) R.ring(ball.x, ball.y, 0.3, 4, 'rgba(255,226,122,0.95)', 0.5);
     if (ball.lie === T.SAND) R.burst(ball.x, ball.y, 26, { colors: ['#f3e3b5', '#d9c38c'], speed: 6, up: 6, life: 0.9, size: 0.25 });
     else if (ball.lie !== T.TEE) R.burst(ball.x, ball.y, 12, { colors: ['#5c8a3a', '#7a5a33'], speed: 5, up: 5, life: 0.7, size: 0.2, angle: input.aim, spread: 0.8 });
   }
-  updatePanel();
+  refreshPhase();
 }
 
-function stepAnim(dt) {
-  const a = U.anim;
-  if (!a) return;
+function stepAnims(dt) {
+  for (const a of [...U.anims]) stepAnim(a, dt);
+}
+
+function stepAnim(a, dt) {
   const frames = a.res.frames;
   if (a.i < frames.length - 1) {
     a.t += dt;
@@ -368,22 +471,26 @@ function stepAnim(dt) {
   if (a.hold === 0) finishShotFx(a);
   a.hold += dt;
   if (a.hold > (a.res.outcome === 'holed' ? 1.8 : 1.1)) {
-    U.anim = null;
+    U.anims = U.anims.filter((x) => x !== a);
     const prevH = G.h;
-    G = a.after;
+    if (G.players[a.p].shots === a.k) G = applyShot(G, a.p, a.input, a.res);
     save();
     updateHud();
-    if (G.h !== prevH || G.done) showCard();
-    else enterTurn();
+    if (G.h !== prevH || G.done) U.pendingCard = true;
+    if (U.pendingCard && !U.anims.length) {
+      U.pendingCard = false;
+      showCard();
+    } else refreshPhase();
   }
 }
 
 function fireEvent(ev, a) {
+  const mine = isLocal(a.p);
   switch (ev.type) {
     case 'tree':
       sound.tree();
       R.burst(ev.x, ev.y, 18, { colors: ['#2f6e2c', '#4a9a3e', '#1f4d20'], speed: 4, up: 2, life: 1.1, size: 0.35 });
-      popup('Timber!', '#c9f0b0', 1.1, 26);
+      if (mine) popup('Timber!', '#c9f0b0', 1.1, 26);
       break;
     case 'land': {
       const t = ev.terrain;
@@ -393,7 +500,7 @@ function fireEvent(ev, a) {
       } else if (t === T.GREEN || t === T.FRINGE) sound.land('green');
       else if (t === T.ROUGH || t === T.DEEP) sound.land('rough');
       else if (t !== T.WATER) sound.land('fairway');
-      if (!CLUBS[a.input.club].putter && t !== T.WATER) popup(`${Math.round(a.res.carry)} yd carry`, '#ffffff', 1.4, 20, true);
+      if (mine && !CLUBS[a.input.club].putter && t !== T.WATER) popup(`${Math.round(a.res.carry)} yd carry`, '#ffffff', 1.4, 20, true);
       break;
     }
     case 'splash':
@@ -406,9 +513,7 @@ function fireEvent(ev, a) {
       sound.lip();
       break;
     case 'spinback':
-      popup('Spin back!', '#9fe3ff', 1.4, 28);
-      break;
-    case 'dunk':
+      if (mine || !G.simul) popup('Spin back!', '#9fe3ff', 1.4, 28);
       break;
   }
 }
@@ -416,27 +521,37 @@ function fireEvent(ev, a) {
 function finishShotFx(a) {
   const res = a.res;
   const pl = G.players[a.p];
+  const mine = isLocal(a.p) || !G.simul;
+  const who = G.players.length > 1 && (G.simul || !isLocal(a.p)) ? `${pl.name}: ` : '';
   if (res.outcome === 'holed') {
     sound.cup();
     const strokes = pl.strokes + 1 + res.penalty;
     const d = strokes - hole.par;
-    const name = scoreName(strokes, hole.par);
-    popup(name, d < 0 || strokes === 1 ? '#ffe27a' : '#ffffff', 2, strokes === 1 || d <= -1 ? 48 : 38);
-    sound.applause(strokes === 1 ? 3 : d <= -2 ? 3 : d === -1 ? 2 : d === 0 ? 1 : 0);
+    popup(who + scoreName(strokes, hole.par), d < 0 || strokes === 1 ? '#ffe27a' : '#ffffff', 2, strokes === 1 || d <= -1 ? 44 : 34);
+    if (mine || d < 0) sound.applause(strokes === 1 ? 3 : d <= -2 ? 3 : d === -1 ? 2 : d === 0 ? 1 : 0);
     R.ring(hole.pin.x, hole.pin.y, 0.1, 2.5, 'rgba(255,255,255,0.9)', 0.8);
   } else if (res.outcome === 'water') {
-    popup('In the water', '#a8e4ff', 1.8, 34);
-    popup('Penalty stroke – drop behind the hazard', '#ffffff', 1.8, 18, true);
-    sound.groan();
+    popup(who + 'In the water', '#a8e4ff', 1.8, 30);
+    if (mine) popup('Penalty stroke – drop behind the hazard', '#ffffff', 1.8, 18, true);
+    if (mine) sound.groan();
   } else if (res.outcome === 'ob') {
-    popup('Out of bounds', '#ffb3a6', 1.8, 34);
-    popup('Penalty stroke – replay from the same spot', '#ffffff', 1.8, 18, true);
-    sound.groan();
+    popup(who + 'Out of bounds', '#ffb3a6', 1.8, 30);
+    if (mine) popup('Penalty stroke – replay from the same spot', '#ffffff', 1.8, 18, true);
+    if (mine) sound.groan();
+  } else if (!mine) {
+    // quiet for the other player's ordinary shots
   } else if (res.final.lie === T.SAND) {
     popup('In the bunker', '#f3e3b5', 1.2, 24);
   } else if (CLUBS[a.input.club].putter) {
     const ft = Math.round(toPin(hole, res.final) * 3);
     if (ft <= 3) popup('Tap-in range', '#ffffff', 1.1, 22);
+  } else {
+    // Where it finished: total distance and what's left.
+    const start = res.frames[0];
+    const went = Math.hypot(res.final.x - start.x, res.final.y - start.y);
+    const left = toPin(hole, res.final);
+    const leftTxt = res.final.lie === T.GREEN || left < 20 ? `${Math.max(1, Math.round(left * 3))} ft` : `${Math.round(left)} yd`;
+    popup(`${Math.round(went)} yd · ${leftTxt} to go`, '#ffffff', 1.6, 20, true);
   }
 }
 
@@ -471,9 +586,25 @@ function nextFromCard() {
   beginHole();
 }
 
+function statsHTML(g) {
+  const rows = g.players.map((p, i) => {
+    let fir = 0, firN = 0, gir = 0, putts = 0;
+    p.stats.forEach((s, k) => {
+      if (!s) return;
+      if (HOLES[g.holes[k]].par > 3) {
+        firN++;
+        if (s.fir) fir++;
+      }
+      if (s.gir) gir++;
+      putts += s.putts;
+    });
+    const n = p.stats.filter(Boolean).length;
+    return `<tr><th><span class="dot" style="background:${COLORS[i]}"></span>${escapeHtml(p.name)}</th><td>${fir}/${firN}</td><td>${gir}/${n}</td><td>${putts}</td><td>${n ? (putts / n).toFixed(1) : '–'}</td></tr>`;
+  });
+  return `<div class="sc-wrap"><table class="scorecard stats"><thead><tr><th>Stats</th><th>Fairways</th><th>Greens in reg.</th><th>Putts</th><th>Per hole</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
+}
+
 function showFinal() {
-  const pars = G.holes.map((h) => HOLES[h].par);
-  const parTot = pars.reduce((a, b) => a + b, 0);
   const totals = G.players.map((p) => p.scores.reduce((a, b) => a + b, 0));
   let title;
   if (G.players.length === 1) {
@@ -487,7 +618,7 @@ function showFinal() {
     title = winners.length > 1 ? 'All square!' : `${G.players[winners[0]].name} wins`;
   }
   $('#finalTitle').textContent = title;
-  $('#finalCard').innerHTML = scorecardHTML(G);
+  $('#finalCard').innerHTML = scorecardHTML(G) + statsHTML(G);
   setScreen('final');
   sound.applause(2);
   if (G.mode === 'solo') store.set('solo', null);
@@ -527,8 +658,12 @@ function meterPos(now) {
   return 0;
 }
 
+function swingWindow(power) {
+  return meterWindow(currentBall().lie, U.club, power, U.shape, spinMag()) * difficulty();
+}
+
 function swingTap(ts) {
-  if (U.phase !== 'aim' || U.anim) return;
+  if (U.phase !== 'aim' || !canAct(me())) return;
   const now = Math.abs(ts - performance.now()) < 500 ? ts : performance.now();
   const s = U.swing;
   const putter = CLUBS[U.club].putter;
@@ -541,21 +676,22 @@ function swingTap(ts) {
     U.swing = { phase: 'down', power: m, t1: now };
     sound.tick();
   } else if (s.phase === 'down') {
-    const m = meterPos(now);
-    finishSwing(s.power, m);
+    finishSwing(s.power, meterPos(now));
   }
   updatePanel();
 }
 
 function finishSwing(power, m) {
-  const ball = currentBall();
-  const w = meterWindow(ball.lie, U.club, power, U.shape, spinMag());
-  takeShot(power, m / w);
+  takeShot(power, m / swingWindow(power));
 }
 
 function tickMeter() {
   const s = U.swing;
   if (s.phase === 'idle') return;
+  if (U.phase !== 'aim') {
+    U.swing = { phase: 'idle' };
+    return;
+  }
   const now = performance.now();
   const m = meterPos(now);
   const putter = CLUBS[U.club].putter;
@@ -579,7 +715,7 @@ function drawMeter() {
   const c = mctx;
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
   c.clearRect(0, 0, W, H);
-  if (!G || U.screen !== 'play') return;
+  if (!G || U.screen !== 'play' || U.phase !== 'aim') return;
   const ball = currentBall();
   const club = CLUBS[U.club];
   const putter = !!club.putter;
@@ -591,7 +727,6 @@ function drawMeter() {
   const now = performance.now();
   const m = s.phase === 'idle' ? 0 : meterPos(now);
 
-  // track
   c.fillStyle = 'rgba(0,0,0,0.35)';
   rr(c, pad - 4, top - 4, W - pad * 2 + 8, bh + 8, 12);
   c.fill();
@@ -603,20 +738,18 @@ function drawMeter() {
   rr(c, pad, top, W - pad * 2, bh, 9);
   c.fill();
   if (!putter) {
-    // overswing zone
     c.fillStyle = 'rgba(232,67,58,0.35)';
     c.fillRect(X(1), top, X(METER_MAX) - X(1), bh);
-    // accuracy window
     const pw = s.phase === 'down' ? s.power : 1;
-    const w = meterWindow(ball.lie, U.club, pw, U.shape, spinMag());
-    c.fillStyle = 'rgba(120,230,120,0.35)';
+    const w = swingWindow(pw);
+    // Outside the good window the ball hooks or slices; far outside, a mishit.
+    c.fillStyle = 'rgba(255,180,90,0.22)';
+    c.fillRect(X(-Math.min(0.15, w * MISHIT)), top, X(w * MISHIT) - X(-Math.min(0.15, w * MISHIT)), bh);
+    c.fillStyle = 'rgba(120,230,120,0.38)';
     c.fillRect(X(-w), top, X(w) - X(-w), bh);
-    c.fillStyle = 'rgba(255,240,140,0.8)';
+    c.fillStyle = 'rgba(255,240,140,0.85)';
     c.fillRect(X(-w * 0.22), top, X(w * 0.22) - X(-w * 0.22), bh);
-    c.fillStyle = 'rgba(0,0,0,0.25)';
-    c.fillRect(X(METER_MIN), top, X(-w) - X(METER_MIN), bh);
   }
-  // power fill
   const fillTo = s.phase === 'up' ? m : s.phase === 'down' ? s.power : 0;
   if (fillTo > 0) {
     c.fillStyle = grad;
@@ -624,7 +757,6 @@ function drawMeter() {
     c.fillRect(X(0), top + 6, Math.max(0, X(Math.min(fillTo, hi)) - X(0)), bh - 12);
     c.globalAlpha = 1;
   }
-  // ticks with distances
   c.font = '700 11px Nunito, ui-rounded, system-ui, sans-serif';
   c.textAlign = 'center';
   c.textBaseline = 'bottom';
@@ -640,7 +772,6 @@ function drawMeter() {
     c.fillStyle = '#fff';
     c.fillRect(X(0) - 1.5, top - 2, 3, bh + 4);
   }
-  // chosen power
   if (s.phase === 'down') {
     c.fillStyle = '#fff';
     c.beginPath();
@@ -649,7 +780,6 @@ function drawMeter() {
     c.lineTo(X(s.power) + 7, top + bh + 13);
     c.fill();
   }
-  // marker
   if (s.phase !== 'idle') {
     const x = X(Math.max(lo, Math.min(hi, m)));
     c.fillStyle = 'rgba(0,0,0,0.4)';
@@ -672,9 +802,8 @@ function rr(c, x, y, w, h, r) {
 // ---------- popups ----------
 
 function popup(text, color, life = 1.5, size = 30, small = false) {
-  U.popups.push({ text, color, life, max: life, size, small, t: 0, row: small ? 1 : 0 });
-  // keep newest on top
-  if (U.popups.length > 4) U.popups.shift();
+  U.popups.push({ text, color, life, max: life, size, small, t: 0 });
+  if (U.popups.length > 5) U.popups.shift();
 }
 
 function drawPopups(dt) {
@@ -685,7 +814,7 @@ function drawPopups(dt) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   let y0 = vp.top + 70;
-  const big = U.popups.filter((p) => !p.small).slice(-1);
+  const big = U.popups.filter((p) => !p.small).slice(-2);
   const small = U.popups.filter((p) => p.small).slice(-1);
   for (const p of [...big, ...small]) {
     const f = p.t / p.max;
@@ -709,14 +838,18 @@ function drawPopups(dt) {
 
 function updateHud() {
   if (!G || !hole) return;
-  $('#hNum').textContent = G.h + 1 > G.holes.length ? G.holes.length : G.h + 1;
+  $('#hNum').textContent = Math.min(G.h + 1, G.holes.length);
   $('#hCount').textContent = G.holes.length;
   $('#hName').textContent = hole.name;
   $('#hPar').textContent = hole.par;
   $('#hYards').textContent = hole.yards;
   $('#windSpeed').textContent = wind.speed;
   const chips = G.players
-    .map((p, i) => `<div class="chip${i === G.turn ? ' on' : ''}" style="--c:${COLORS[i]}"><span class="dot"></span><span class="nm"></span><span class="st">${p.holed ? '✓ ' + p.strokes : p.strokes}</span><span class="rl">${fmtRel(relPar(p, G))}</span></div>`)
+    .map((p, i) => {
+      const on = G.simul ? isLocal(i) : i === G.turn;
+      const st = p.h > G.h ? '✓' : p.holed ? `✓ ${p.strokes}` : p.strokes;
+      return `<div class="chip${on ? ' on' : ''}" style="--c:${COLORS[i]}"><span class="dot"></span><span class="nm"></span><span class="st">${st}</span><span class="rl">${fmtRel(relPar(p, G))}</span></div>`;
+    })
     .join('');
   $('#chips').innerHTML = chips;
   [...$('#chips').querySelectorAll('.nm')].forEach((el, i) => (el.textContent = G.players[i].name));
@@ -724,18 +857,27 @@ function updateHud() {
 
 function updatePanel() {
   if (!G || !hole) return;
-  const p = G.turn;
+  const p = me();
   const pl = G.players[p];
   const ball = pl.ball;
-  const mine = isLocal(p) && (U.phase === 'aim' || U.phase === 'pass');
+  const mine = U.phase === 'aim' || U.phase === 'pass';
   $('#panelMine').hidden = !mine;
   $('#panelWait').hidden = mine;
   const dist = toPin(hole, ball);
-  $('#toPin').textContent = ball.lie === T.GREEN || dist < 20 ? `${Math.max(1, Math.round(dist * 3))} ft` : `${Math.round(dist)} yd`;
-  $('#lie').textContent = TERRAIN_NAMES[ball.lie];
-  $('#lie').dataset.lie = ball.lie;
+  $('#toPin').textContent = pl.holed ? 'In' : ball.lie === T.GREEN || dist < 20 ? `${Math.max(1, Math.round(dist * 3))} ft` : `${Math.round(dist)} yd`;
+  $('#lie').textContent = pl.holed ? 'Holed' : TERRAIN_NAMES[ball.lie];
+  $('#lie').dataset.lie = pl.holed ? 5 : ball.lie;
   if (!mine) {
-    const who = U.phase === 'intro' ? '' : U.phase === 'flight' ? (isLocal(p) ? '' : `${pl.name}’s shot`) : isLocal(p) ? '' : `Waiting for ${pl.name}…`;
+    let who = '';
+    if (U.phase !== 'intro') {
+      if (G.simul && pl.holed) {
+        const other = G.players.find((q) => !q.holed);
+        who = other ? `Waiting for ${other.name} to finish the hole…` : '';
+      } else if (U.phase === 'flight') {
+        const a = U.anims[0];
+        who = a && !isLocal(a.p) ? `${G.players[a.p].name}’s shot` : '';
+      } else if (!G.simul && !isLocal(G.turn)) who = `Waiting for ${G.players[G.turn].name}…`;
+    }
     $('#waitText').textContent = who || ' ';
     return;
   }
@@ -791,14 +933,18 @@ function frame(now) {
 function update(dt) {
   if (!G || !hole) return;
   if (U.screen === 'play' || U.screen === 'card' || U.screen === 'pause') sound.ambient(dt);
+  // Shots keep flying (and arriving from the other iPad) behind menus and cards.
+  stepAnims(dt);
+  processQueue();
   if (U.screen !== 'play') return;
   if (U.phase === 'intro') {
     U.introT -= dt;
-    if (U.introT <= 0) enterTurn();
+    if (U.introT <= 0) {
+      U.phase = 'wait';
+      refreshPhase();
+    }
   }
   tickMeter();
-  stepAnim(dt);
-  processQueue();
   updateCamera(dt);
   const wa = wind.dir + U.cam.rot;
   $('#windArrow').style.transform = `rotate(${(wa * 180) / Math.PI}deg)`;
@@ -819,17 +965,17 @@ function render(dt) {
   };
   const multi = G.players.length > 1;
   G.players.forEach((p, i) => {
-    if (U.anim && U.anim.p === i) return;
-    if (p.holed) return;
-    scene.balls.push({ x: p.ball.x, y: p.ball.y, z: 0, color: COLORS[i], label: multi && U.cam.scale < 6 ? p.name.slice(0, 1).toUpperCase() : null, ring: i === G.turn && isLocal(i) && U.phase === 'aim' });
+    if (animFor(i)) return;
+    if (p.holed || p.h !== G.h) return;
+    scene.balls.push({ x: p.ball.x, y: p.ball.y, z: 0, color: COLORS[i], label: multi && U.cam.scale < 6 ? p.name.slice(0, 1).toUpperCase() : null, ring: i === me() && U.phase === 'aim' });
   });
-  if (U.anim) {
-    const f = U.anim.res.frames[U.anim.i];
-    scene.balls.push({ x: f.x, y: f.y, z: f.z, color: COLORS[U.anim.p] });
-    scene.trails.push(U.anim.trail);
+  for (const a of U.anims) {
+    const f = a.res.frames[a.i];
+    scene.balls.push({ x: f.x, y: f.y, z: f.z, color: COLORS[a.p] });
+    scene.trails.push(a.trail);
   }
   const ball = currentBall();
-  if (U.screen === 'play' && U.phase === 'aim' && isLocal(G.turn)) {
+  if (U.screen === 'play' && U.phase === 'aim') {
     const club = CLUBS[U.club];
     scene.aim = {
       x: ball.x, y: ball.y, dir: U.aim,
@@ -847,13 +993,14 @@ function render(dt) {
       }
     }
   }
-  scene.showSlope = U.cam.scale > 7 && (ball.lie === T.GREEN || ball.lie === T.FRINGE || CLUBS[U.club].putter);
+  scene.showSlope = U.cam.scale > 7 && (ball.lie === T.GREEN || ball.lie === T.FRINGE || (U.phase === 'aim' && CLUBS[U.club].putter));
   const side = drawSide();
   if (scene.aim && side && side.hit && !side.hit.edge) scene.aim.color = 'rgba(255,140,125,0.95)';
   R.draw(scene);
   drawPopups(dt);
   drawMeter();
 }
+
 
 // ---------- side view ----------
 
@@ -883,7 +1030,7 @@ function corridorTrees(ball, dir, reach) {
 
 function drawSide() {
   const wrap = $('#sideWrap');
-  const show = U.screen === 'play' && (U.phase === 'aim') && isLocal(G.turn) && !CLUBS[U.club].putter && !U.mapView;
+  const show = U.screen === 'play' && (U.phase === 'aim') && !CLUBS[U.club].putter && !U.mapView;
   if (!show) {
     wrap.hidden = true;
     return null;
@@ -1039,6 +1186,7 @@ function drawSide() {
   return d.main;
 }
 
+
 // Menus show a slowly turning view of a hole behind them.
 function renderBackdrop(dt) {
   if (!hole) {
@@ -1068,7 +1216,7 @@ function onNetMessage(msg) {
       if (o.role === 'host') {
         if (!G) {
           const names = [store.get('name', 'Player 1'), msg.name || 'Player 2'];
-          G = newGame('online', names, [...Array(HOLES.length).keys()]);
+          G = newGame('online', names, [...Array(HOLES.length).keys()], { simul: store.get('onlineSimul', true) });
           save();
           o.link.send({ t: 'start', game: G, name: store.get('name', 'Player 1') });
           startPlay();
@@ -1080,13 +1228,11 @@ function onNetMessage(msg) {
     case 'start':
       if (o.role === 'guest') {
         clearInterval(o.helloTimer);
-        const fresh = !G || G.seed !== msg.game.seed;
-        if (fresh || msg.game.n > G.n) {
+        if (!G || G.seed !== msg.game.seed) {
           G = msg.game;
           save();
-          if (fresh) startPlay();
-          else resync();
-        }
+          startPlay();
+        } else merge(msg.game);
       }
       break;
     case 'shot':
@@ -1096,14 +1242,13 @@ function onNetMessage(msg) {
       if (G) o.link.send({ t: 'sync', game: G });
       break;
     case 'sync':
-      if (G && msg.game.seed === G.seed && msg.game.n > G.n && !U.anim) {
-        G = msg.game;
-        save();
-        resync();
-      }
+      merge(msg.game);
       break;
     case 'ping':
-      if (G && msg.n > G.n && !U.anim && !U.queue.length) o.link.send({ t: 'sync-req' });
+      if (G && msg.seed === G.seed && Array.isArray(msg.shots)) {
+        const behind = msg.shots.some((k, i) => G.players[i] && k > G.players[i].shots + (animFor(i) ? 1 : 0));
+        if (behind && !U.queue.length) requestSync();
+      }
       break;
     case 'bye':
       popup(`${o.peerName || 'Your opponent'} left the game`, '#ffb3a6', 3, 22, true);
@@ -1111,30 +1256,64 @@ function onNetMessage(msg) {
   }
 }
 
-function processQueue() {
-  if (!U.queue.length || U.anim || U.screen !== 'play') return;
-  if (U.phase !== 'wait' && U.phase !== 'aim') return;
-  const msg = U.queue.shift();
-  if (!G || msg.after.seed !== G.seed) return;
-  if (msg.n < G.n) return; // already applied
-  if (msg.n > G.n) {
-    // We missed something; jump straight to the sender's state.
-    G = msg.after;
-    save();
-    resync();
-    return;
-  }
-  const res = simulateShot(hole, G.players[msg.p].ball, msg.input, wind, shotSeed(G.seed, G.h, msg.p, G.n));
-  startAnim(msg.p, msg.input, res, msg.after);
+function requestSync() {
+  const now = Date.now();
+  if (!U.online || now - (U.lastSyncReq || 0) < 2500) return;
+  U.lastSyncReq = now;
+  U.online.link.send({ t: 'sync-req' });
 }
 
-function resync() {
+// Take the other device's copy of any player that is further along than ours.
+function merge(remote) {
+  if (!G || !remote || remote.seed !== G.seed) return;
+  const prevH = G.h;
+  let changed = false;
+  remote.players.forEach((rp, i) => {
+    if (!G.players[i] || animFor(i)) return;
+    if (rp.shots > G.players[i].shots) {
+      G.players[i] = rp;
+      changed = true;
+    }
+  });
+  if (!changed) return;
+  settle(G);
+  computeTurn(G);
+  save();
+  updateHud();
   if (G.done) return showFinal();
-  if (!hole || hole.index !== G.holes[G.h]) {
-    setScreen('play');
-    beginHole();
-  } else {
-    enterTurn();
+  if (G.h !== prevH && G.last) {
+    if (U.screen === 'play' && !U.anims.length) showCard();
+    else U.pendingCard = true;
+  } else refreshPhase();
+}
+
+function processQueue() {
+  if (!U.queue.length || !G || !hole) return;
+  if (U.screen !== 'play' && U.screen !== 'pause') return;
+  if (U.phase === 'intro') return;
+  for (let qi = 0; qi < U.queue.length; qi++) {
+    const msg = U.queue[qi];
+    const pl = G.players[msg.p];
+    if (!pl) {
+      U.queue.splice(qi--, 1);
+      continue;
+    }
+    const expected = pl.shots + (animFor(msg.p) ? 1 : 0);
+    if (msg.k < expected) {
+      U.queue.splice(qi--, 1); // already have it
+      continue;
+    }
+    if (msg.k > expected) {
+      U.queue.splice(qi--, 1); // we missed one; ask for the full state
+      requestSync();
+      continue;
+    }
+    if (animFor(msg.p)) continue; // wait for their previous shot to land
+    if (msg.h !== pl.h || G.holes[msg.h] !== hole.index) continue; // next hole: wait until we get there
+    if (!G.simul && U.anims.length) continue;
+    U.queue.splice(qi--, 1);
+    const res = simulateShot(hole, pl.ball, msg.input, wind, shotSeed(G.seed, pl.h, msg.p, pl.shots));
+    startAnim(msg.p, msg.input, res);
   }
 }
 
@@ -1176,7 +1355,7 @@ async function goOnline(role, code) {
   clearInterval(o.pingTimer);
   o.pingTimer = setInterval(() => {
     if (U.online !== o) return;
-    o.link.send({ t: 'ping', n: G ? G.n : -1, name: store.get('name', '') });
+    o.link.send({ t: 'ping', seed: G ? G.seed : 0, shots: G ? G.players.map((p) => p.shots) : [], name: store.get('name', '') });
     updateNetPill();
   }, 4000);
   return true;
@@ -1215,6 +1394,11 @@ async function rejoin() {
   const saved = store.get('online', null);
   if (!saved) return;
   sound.click();
+  if (!saved.game || saved.game.v !== 2) {
+    store.set('online', null);
+    refreshTitle();
+    return;
+  }
   G = saved.game;
   U.local = [saved.role === 'host' ? 0 : 1];
   setScreen('lobby');
@@ -1244,10 +1428,12 @@ function saveName() {
 // ---------- starting games ----------
 
 function startPlay() {
-  U.anim = null;
+  U.anims = [];
   U.queue = [];
   U.lastPlayer = -1;
   U.popups = [];
+  U.pendingCard = false;
+  U.aimFor = '';
   setScreen('play');
   if (G.done) return showFinal();
   beginHole();
@@ -1258,7 +1444,8 @@ function startSolo(fromSave) {
   sound.click();
   leaveOnline();
   U.local = [0];
-  const saved = fromSave ? store.get('solo', null) : null;
+  let saved = fromSave ? store.get('solo', null) : null;
+  if (saved && saved.v !== 2) saved = null;
   G = saved || newGame('solo', [store.get('name', 'You') || 'You'], [...Array(HOLES.length).keys()]);
   startPlay();
 }
@@ -1286,22 +1473,27 @@ function toTitle() {
   leaveOnline();
   G = null;
   hole = null;
-  U.anim = null;
+  U.anims = [];
+  U.queue = [];
   setScreen('title');
   refreshTitle();
 }
 
 function refreshTitle() {
   const solo = store.get('solo', null);
-  $('#btnContinue').hidden = !solo;
-  if (solo) $('#btnContinue').textContent = `Continue round · Hole ${solo.h + 1}`;
+  const soloOk = solo && solo.v === 2;
+  $('#btnContinue').hidden = !soloOk;
+  if (soloOk) $('#btnContinue').textContent = `Continue round · Hole ${solo.h + 1}`;
   const online = store.get('online', null);
-  $('#btnRejoin').hidden = !online;
-  if (online) $('#btnRejoin').textContent = `Rejoin online game ${online.code}`;
+  const onlineOk = online && online.game && online.game.v === 2;
+  $('#btnRejoin').hidden = !onlineOk;
+  if (onlineOk) $('#btnRejoin').textContent = `Rejoin online game ${online.code}`;
   const best = store.get('bestRound', null);
   const par = HOLES.reduce((a, h) => a + h.par, 0);
   $('#bestLine').textContent = best == null ? `9 holes · Par ${par}` : `Best round ${best} (${fmtRel(best - par)})`;
   $('#btnSound').textContent = sound.muted ? 'Sound off' : 'Sound on';
+  const d = store.get('difficulty', 'standard');
+  $('#btnDiff').textContent = `Timing: ${d[0].toUpperCase() + d.slice(1)}`;
 }
 
 function showPracticeList() {
@@ -1324,24 +1516,49 @@ function showPracticeList() {
 // ---------- input ----------
 
 const canvas = $('#game');
+const pointers = new Map();
+const pinchDist = () => {
+  const [a, b] = [...pointers.values()];
+  return Math.hypot(a.x - b.x, a.y - b.y) || 1;
+};
 canvas.addEventListener('pointerdown', (e) => {
   sound.unlock();
-  if (U.screen !== 'play' || U.phase !== 'aim' || U.swing.phase !== 'idle' || U.mapView) return;
-  U.dragging = { id: e.pointerId, camDir: U.aim };
-  aimAt(e.clientX, e.clientY);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   try {
     canvas.setPointerCapture(e.pointerId);
   } catch {}
+  if (pointers.size === 2 && U.screen === 'play') {
+    // Two fingers: pinch to zoom instead of aiming.
+    U.dragging = null;
+    U.pinch = { d: pinchDist(), z: U.zoom };
+    return;
+  }
+  if (U.screen !== 'play' || U.phase !== 'aim' || U.swing.phase !== 'idle' || U.mapView) return;
+  U.dragging = { id: e.pointerId, camDir: U.aim };
+  aimAt(e.clientX, e.clientY);
 });
 canvas.addEventListener('pointermove', (e) => {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (U.pinch && pointers.size >= 2) {
+    U.zoom = Math.max(0.35, Math.min(4, (U.pinch.z * pinchDist()) / U.pinch.d));
+    return;
+  }
   if (!U.dragging || e.pointerId !== U.dragging.id) return;
   aimAt(e.clientX, e.clientY);
 });
-const endDrag = (e) => {
+const endPointer = (e) => {
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) U.pinch = null;
   if (U.dragging && e.pointerId === U.dragging.id) U.dragging = null;
 };
-canvas.addEventListener('pointerup', endDrag);
-canvas.addEventListener('pointercancel', endDrag);
+canvas.addEventListener('pointerup', endPointer);
+canvas.addEventListener('pointercancel', endPointer);
+canvas.addEventListener('wheel', (e) => {
+  if (U.screen !== 'play') return;
+  e.preventDefault();
+  U.zoom = Math.max(0.35, Math.min(4, U.zoom * Math.exp(-e.deltaY * 0.0015)));
+}, { passive: false });
 
 function aimAt(sx, sy) {
   const [wx, wy] = R.toWorld(sx, sy);
@@ -1403,7 +1620,8 @@ $('#rangeBtn').addEventListener('click', () => {
   sound.click();
   updatePanel();
 });
-// Spin ball: where you'd strike the ball. Up = topspin, down = backspin.
+// Shape & spin ball: where you'd strike the ball. Up = topspin, down =
+// backspin, left/right = draw/fade.
 {
   const el = $('#spinBall');
   let lastTap = 0, active = null;
@@ -1413,7 +1631,7 @@ $('#rangeBtn').addEventListener('click', () => {
     let y = -(e.clientY - (r.top + r.height / 2)) / (r.height / 2 - 8);
     const m = Math.hypot(x, y);
     if (m > 1) { x /= m; y /= m; }
-    if (m < 0.18) { x = 0; y = 0; }
+    if (m < 0.12) { x = 0; y = 0; }
     U.spin = { x: Math.round(x * 20) / 20, y: Math.round(y * 20) / 20 };
     updatePanel();
   };
@@ -1472,6 +1690,8 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowDown') changeClub(1);
   else if (e.key === 'm') $('#mapBtn').click();
   else if (e.key === 's') $('#shapeBtn').click();
+  else if (e.key === '=' || e.key === '+') U.zoom = Math.min(4, U.zoom * 1.2);
+  else if (e.key === '-') U.zoom = Math.max(0.35, U.zoom / 1.2);
 });
 
 $('#pass').addEventListener('click', () => {
@@ -1512,12 +1732,37 @@ on('#btnTwo', () => {
   $('#p2Input').value = names[1];
   setScreen('setup');
 });
+function refreshModeButtons() {
+  const simul = store.get('onlineSimul', true);
+  $('#modeSimul').classList.toggle('on', simul);
+  $('#modeTurns').classList.toggle('on', !simul);
+  $('#modeSimul').setAttribute('aria-pressed', String(simul));
+  $('#modeTurns').setAttribute('aria-pressed', String(!simul));
+}
 on('#btnOnline', () => {
   sound.click();
   $('#nameInput').value = store.get('name', '');
   $('#hostBox').hidden = true;
   $('#lobbyStatus').textContent = 'Both iPads need an internet connection. Any Wi‑Fi works.';
+  refreshModeButtons();
   setScreen('lobby');
+});
+on('#modeSimul', () => {
+  store.set('onlineSimul', true);
+  refreshModeButtons();
+  sound.click();
+});
+on('#modeTurns', () => {
+  store.set('onlineSimul', false);
+  refreshModeButtons();
+  sound.click();
+});
+on('#btnDiff', () => {
+  const order = ['casual', 'standard', 'pro'];
+  const d = store.get('difficulty', 'standard');
+  store.set('difficulty', order[(order.indexOf(d) + 1) % order.length]);
+  refreshTitle();
+  sound.click();
 });
 on('#btnPractice', showPracticeList);
 on('#btnHelp', () => {
@@ -1562,6 +1807,10 @@ on('#menuBtn', () => {
 on('#btnResume', () => {
   sound.click();
   setScreen('play');
+  if (U.pendingCard && !U.anims.length) {
+    U.pendingCard = false;
+    showCard();
+  } else refreshPhase();
 });
 on('#btnPauseHelp', () => {
   sound.click();
@@ -1591,7 +1840,10 @@ if ('serviceWorker' in navigator && window.top === window.self && location.proto
 }
 
 // Test hook: lets automated checks inspect state. Harmless in normal play.
-window.__pl = { get G() { return G; }, get U() { return U; }, get hole() { return hole; }, enterTurn, showFinal, showCard, setBall: (x, y, lie) => { G.players[G.turn].ball = { x, y, lie }; enterTurn(); } };
+window.__pl = {
+  get G() { return G; }, get U() { return U; }, get hole() { return hole; }, showFinal, showCard, refreshPhase,
+  setBall: (x, y, lie) => { G.players[me()].ball = { x, y, lie }; U.aimFor = ''; refreshPhase(); },
+};
 
 setScreen('title');
 refreshTitle();
