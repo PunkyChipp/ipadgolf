@@ -127,8 +127,8 @@
 
 <section id="lobby" class="screen" hidden>
   <div class="panel wide">
-    <h2>Two iPads</h2>
-    <p class="sub">One of you hosts and reads out the code. The other joins with it.</p>
+    <h2>Online</h2>
+    <p class="sub">One of you hosts and reads out the code. Up to three friends join with it, then the host starts.</p>
     <label class="field">
       <span>Your name</span>
       <input id="nameInput" maxlength="14" autocomplete="off" placeholder="Your name">
@@ -144,6 +144,7 @@
         <div id="hostBox" class="host-box" hidden>
           <small>Game code</small>
           <div id="codeShow" class="code">----</div>
+          <button id="btnStart" class="btn primary" disabled>Start game</button>
         </div>
       </div>
       <div class="lobby-col">
@@ -152,6 +153,7 @@
         <button id="btnJoin" class="btn">Join game</button>
       </div>
     </div>
+    <ul id="roster" class="roster" hidden></ul>
     <p id="lobbyStatus" class="status" role="status"></p>
     <button id="btnLobbyBack" class="link-btn">Back</button>
   </div>
@@ -248,8 +250,8 @@
         <p>Water: one stroke, and you drop behind the hazard. Out of bounds (past the white stakes): one stroke, and you replay from the same spot.</p>
       </div>
       <div>
-        <h3>Two players</h3>
-        <p>On one iPad, whoever is furthest from the hole plays next, and the lowest score on the last hole tees off first. On two iPads (both need internet, any Wi‑Fi), the host picks <b>Same time</b>, where you both play your own ball without waiting and the next hole starts when you've both holed out, or <b>Take turns</b> like real golf.</p>
+        <h3>Playing together</h3>
+        <p>On one iPad, two players take turns. Online, up to 4 players each use their own iPad (any Wi‑Fi or mobile data). The host taps <b>Create game</b> and reads out the code, everyone else joins with it, and the host taps <b>Start game</b>. With <b>Same time</b>, everyone plays their own ball without waiting, and the next hole starts once you've all holed out. <b>Take turns</b> plays in normal golf order.</p>
       </div>
       <div>
         <h3>View and difficulty</h3>

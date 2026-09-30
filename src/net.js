@@ -36,9 +36,10 @@ function loadLib() {
 }
 
 export class Link {
-  constructor(code, { onMessage, onStatus }) {
+  constructor(code, { id, version = 0, onMessage, onStatus }) {
     this.code = code;
-    this.id = Math.random().toString(36).slice(2, 10);
+    this.version = version;
+    this.id = id || Math.random().toString(36).slice(2, 10);
     this.onMessage = onMessage;
     this.onStatus = onStatus;
     this.clients = [];
@@ -119,7 +120,7 @@ export class Link {
   }
 
   send(msg) {
-    const body = JSON.stringify({ ...msg, from: this.id, mid: this.id + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) });
+    const body = JSON.stringify({ ...msg, pv: this.version, from: this.id, mid: this.id + Date.now().toString(36) + Math.random().toString(36).slice(2, 6) });
     const topic = TOPIC + this.code;
     let sent = false;
     for (const c of this.clients) {

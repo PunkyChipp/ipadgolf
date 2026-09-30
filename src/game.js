@@ -21,7 +21,10 @@ function buildHole(i, seed) {
   return h;
 }
 const TAU = Math.PI * 2;
-const COLORS = ['#e8433a', '#2f7de1'];
+const COLORS = ['#e8433a', '#2f7de1', '#f2b705', '#a45de0'];
+const MAX_ONLINE = 4;
+// Bump when online messages change, so mismatched copies of the game say so instead of stalling.
+const NET_VERSION = 3;
 const METER_MIN = -0.15;
 const METER_MAX = 1.1;
 const DIFFICULTY = { casual: 1.5, standard: 1, pro: 0.72 };
@@ -70,7 +73,8 @@ function newGame(mode, names, holes, { simul = false, seed = (Math.random() * 2 
 
 function teeSpot(g, hl, i) {
   const t = hl.tee;
-  const off = g.players.length > 1 ? (i === 0 ? -1.6 : 1.6) : 0;
+  const n = g.players.length;
+  const off = (i - (n - 1) / 2) * (n > 2 ? 2.4 : 3.2);
   return { x: t.x + Math.cos(t.ang + Math.PI / 2) * off, y: t.y + Math.sin(t.ang + Math.PI / 2) * off, lie: T.TEE };
 }
 
@@ -159,7 +163,7 @@ const U = {
   screen: 'title',
   phase: 'idle', // intro | aim | wait | flight | pass
   local: [0], // player indices this device controls
-  online: null, // { link, role, code, peerSeen, peerName }
+  online: null, // { link, role, code, peers, roster }
   club: 0,
   shape: 0,
   spin: { x: 0, y: 0 },
@@ -195,6 +199,16 @@ function scoreName(strokes, par) {
   if (strokes === 1) return 'Hole in One!';
   const d = strokes - par;
   return { '-3': 'Albatross!', '-2': 'Eagle!', '-1': 'Birdie!', 0: 'Par', 1: 'Bogey', 2: 'Double Bogey', 3: 'Triple Bogey' }[d] ?? (d < 0 ? 'Condor!' : `+${d}`);
+}
+
+// A stable id for this device, so a player keeps their seat when they rejoin.
+function deviceId() {
+  let id = store.get('device', null);
+  if (!id) {
+    id = Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
+    store.set('device', id);
+  }
+  return id;
 }
 
 function isLocal(p) {
@@ -852,6 +866,7 @@ function updateHud() {
     })
     .join('');
   $('#chips').innerHTML = chips;
+  $('#chips').classList.toggle('many', G.players.length > 2);
   [...$('#chips').querySelectorAll('.nm')].forEach((el, i) => (el.textContent = G.players[i].name));
 }
 
@@ -871,8 +886,8 @@ function updatePanel() {
     let who = '';
     if (U.phase !== 'intro') {
       if (G.simul && pl.holed) {
-        const other = G.players.find((q) => !q.holed);
-        who = other ? `Waiting for ${other.name} to finish the hole…` : '';
+        const left = G.players.filter((q) => !q.holed && q.h === G.h);
+        who = left.length === 1 ? `Waiting for ${left[0].name} to finish the hole…` : left.length ? `Waiting for ${left.length} players to finish the hole…` : '';
       } else if (U.phase === 'flight') {
         const a = U.anims[0];
         who = a && !isLocal(a.p) ? `${G.players[a.p].name}’s shot` : '';
@@ -936,6 +951,15 @@ function update(dt) {
   // Shots keep flying (and arriving from the other iPad) behind menus and cards.
   stepAnims(dt);
   processQueue();
+  // Waiting online with nothing moving: now and then ask the others for their copy,
+  // in case a message went missing.
+  if (U.online && U.screen === 'play' && U.phase === 'wait' && !U.anims.length) {
+    U.waitT = (U.waitT || 0) + dt;
+    if (U.waitT > 6) {
+      U.waitT = 0;
+      requestSync();
+    }
+  } else U.waitT = 0;
   if (U.screen !== 'play') return;
   if (U.phase === 'intro') {
     U.introT -= dt;
@@ -1208,52 +1232,128 @@ function renderBackdrop(dt) {
 function onNetMessage(msg) {
   const o = U.online;
   if (!o) return;
-  o.peerSeen = Date.now();
-  if (msg.name) o.peerName = msg.name;
+  if (msg.to && msg.to !== deviceId()) return;
+  if (msg.pv !== NET_VERSION) return warnVersion(msg);
+  if (msg.from) {
+    const peer = o.peers.get(msg.from) || {};
+    peer.seen = Date.now();
+    if (msg.name) peer.name = msg.name;
+    o.peers.set(msg.from, peer);
+  }
   updateNetPill();
   switch (msg.t) {
     case 'hello':
-      if (o.role === 'host') {
-        if (!G) {
-          const names = [store.get('name', 'Player 1'), msg.name || 'Player 2'];
-          G = newGame('online', names, [...Array(HOLES.length).keys()], { simul: store.get('onlineSimul', true) });
-          save();
-          o.link.send({ t: 'start', game: G, name: store.get('name', 'Player 1') });
-          startPlay();
-        } else {
-          o.link.send({ t: 'start', game: G, name: store.get('name', 'Player 1') });
-        }
+      if (o.role !== 'host') break;
+      if (!G) {
+        if (!o.roster.some((r) => r.id === msg.from)) {
+          if (o.roster.length >= MAX_ONLINE) {
+            o.link.send({ t: 'full', to: msg.from });
+            break;
+          }
+          o.roster.push({ id: msg.from, name: msg.name || `Player ${o.roster.length + 1}` });
+          sound.click();
+        } else if (msg.name) o.roster.find((r) => r.id === msg.from).name = msg.name;
+        sendRoster();
+      } else if (G.ids && G.ids.includes(msg.from)) {
+        o.link.send({ t: 'start', game: G, to: msg.from });
+      } else {
+        o.link.send({ t: 'started', to: msg.from });
       }
       break;
-    case 'start':
-      if (o.role === 'guest') {
-        clearInterval(o.helloTimer);
-        if (!G || G.seed !== msg.game.seed) {
-          G = msg.game;
-          save();
-          startPlay();
-        } else merge(msg.game);
+    case 'lobby':
+      if (o.role === 'guest' && !G) {
+        o.roster = msg.roster;
+        renderRoster();
+        $('#lobbyStatus').textContent = msg.roster.some((r) => r.id === deviceId())
+          ? `You're in! Waiting for ${msg.roster[0].name} to start the game…`
+          : `Joining game ${o.code}…`;
       }
       break;
+    case 'full':
+      if (!G) $('#lobbyStatus').textContent = `That game already has ${MAX_ONLINE} players.`;
+      break;
+    case 'started':
+      if (!G) $('#lobbyStatus').textContent = 'That game has already started without you.';
+      break;
+    case 'start': {
+      if (o.role !== 'guest') break;
+      const idx = msg.game.ids ? msg.game.ids.indexOf(deviceId()) : 1;
+      if (idx < 0) break;
+      clearInterval(o.helloTimer);
+      if (!G || G.seed !== msg.game.seed) {
+        G = msg.game;
+        U.local = [idx];
+        save();
+        startPlay();
+      } else merge(msg.game);
+      break;
+    }
     case 'shot':
       U.queue.push(msg);
       break;
     case 'sync-req':
-      if (G) o.link.send({ t: 'sync', game: G });
+      if (G) sendSync();
       break;
     case 'sync':
       merge(msg.game);
       break;
     case 'ping':
       if (G && msg.seed === G.seed && Array.isArray(msg.shots)) {
+        // Anyone further along than us: ask for their copy. Anyone behind: send ours.
         const behind = msg.shots.some((k, i) => G.players[i] && k > G.players[i].shots + (animFor(i) ? 1 : 0));
-        if (behind && !U.queue.length) requestSync();
+        const ahead = msg.shots.some((k, i) => G.players[i] && k < G.players[i].shots);
+        if (behind) requestSync();
+        if (ahead) sendSync();
       }
       break;
-    case 'bye':
-      popup(`${o.peerName || 'Your opponent'} left the game`, '#ffb3a6', 3, 22, true);
+    case 'bye': {
+      const peer = o.peers.get(msg.from);
+      if (peer) peer.seen = 0;
+      if (G) popup(`${(peer && peer.name) || 'A player'} left the game`, '#ffb3a6', 3, 22, true);
+      else if (o.role === 'host') {
+        o.roster = o.roster.filter((r) => r.id !== msg.from);
+        sendRoster();
+      }
+      updateNetPill();
       break;
+    }
   }
+}
+
+function warnVersion(msg) {
+  const now = Date.now();
+  if (now - (U.versionWarned || 0) < 8000) return;
+  U.versionWarned = now;
+  const who = msg.name || 'Someone';
+  const text = `${who} has a different version of the game. Everyone should close the game fully, reopen it and start a new game.`;
+  if (U.screen === 'lobby') $('#lobbyStatus').textContent = text;
+  else popup(`${who} needs to update: close and reopen the game`, '#ffb3a6', 4, 20, true);
+}
+
+function sendRoster() {
+  const o = U.online;
+  if (!o) return;
+  renderRoster();
+  o.link.send({ t: 'lobby', roster: o.roster });
+  const n = o.roster.length;
+  $('#btnStart').disabled = n < 2;
+  $('#lobbyStatus').textContent = n < 2 ? 'Tell your friends this code, then wait here.' : n < MAX_ONLINE ? `${n} players in. Start when everyone has joined.` : 'The lobby is full. Start when you’re ready.';
+}
+
+function renderRoster() {
+  const o = U.online;
+  const list = $('#roster');
+  const roster = (o && o.roster) || [];
+  list.hidden = !roster.length;
+  list.innerHTML = roster.map((r, i) => `<li><span class="dot" style="background:${COLORS[i]}"></span><span class="nm"></span>${i === 0 ? '<small>Host</small>' : ''}</li>`).join('');
+  [...list.querySelectorAll('.nm')].forEach((el, i) => (el.textContent = roster[i].name + (roster[i].id === deviceId() ? ' (you)' : '')));
+}
+
+function sendSync() {
+  const now = Date.now();
+  if (!U.online || !G || now - (U.lastSyncSent || 0) < 1500) return;
+  U.lastSyncSent = now;
+  U.online.link.send({ t: 'sync', game: G });
 }
 
 function requestSync() {
@@ -1325,18 +1425,35 @@ function updateNetPill() {
     return;
   }
   pill.hidden = false;
-  const peerOk = o.peerSeen && Date.now() - o.peerSeen < 13000;
+  const now = Date.now();
+  const ids = G && G.ids ? G.ids.filter((id) => id !== deviceId()) : [...o.peers.keys()];
+  const live = ids.filter((id) => o.peers.get(id) && now - o.peers.get(id).seen < 13000);
+  const lost = ids.filter((id) => !live.includes(id));
   const up = o.status === 'online';
-  pill.dataset.state = !up ? 'bad' : peerOk ? 'ok' : 'warn';
-  pill.textContent = !up ? 'Reconnecting…' : peerOk ? `${o.peerName || 'Opponent'} connected` : `Waiting for ${o.peerName || 'opponent'}`;
+  const nameOf = (id) => {
+    const k = G && G.ids ? G.ids.indexOf(id) : -1;
+    return k >= 0 ? G.players[k].name : (o.peers.get(id) && o.peers.get(id).name) || 'player';
+  };
+  pill.dataset.state = !up ? 'bad' : ids.length && !lost.length ? 'ok' : 'warn';
+  pill.textContent = !up
+    ? 'Reconnecting…'
+    : !ids.length
+      ? 'Waiting for players'
+      : lost.length
+        ? `Waiting for ${lost.length > 1 ? lost.length + ' players' : nameOf(lost[0])}`
+        : live.length > 1
+          ? `${live.length} players connected`
+          : `${nameOf(live[0])} connected`;
 }
 
 async function goOnline(role, code) {
   const status = (t) => ($('#lobbyStatus').textContent = t);
   if (U.online) U.online.link.close();
-  const o = { role, code, status: 'connecting', peerSeen: 0, peerName: null };
+  const o = { role, code, status: 'connecting', peers: new Map(), roster: [] };
   U.online = o;
   o.link = new Link(code, {
+    id: deviceId(),
+    version: NET_VERSION,
     onMessage: onNetMessage,
     onStatus: (s) => {
       o.status = s;
@@ -1356,6 +1473,12 @@ async function goOnline(role, code) {
   o.pingTimer = setInterval(() => {
     if (U.online !== o) return;
     o.link.send({ t: 'ping', seed: G ? G.seed : 0, shots: G ? G.players.map((p) => p.shots) : [], name: store.get('name', '') });
+    if (o.role === 'host' && !G) {
+      // Drop anyone who left the lobby without saying so.
+      const before = o.roster.length;
+      o.roster = o.roster.filter((r, i) => i === 0 || (o.peers.get(r.id) && Date.now() - o.peers.get(r.id).seen < 12000));
+      if (o.roster.length !== before) sendRoster();
+    }
     updateNetPill();
   }, 4000);
   return true;
@@ -1369,7 +1492,24 @@ async function hostGame() {
   U.local = [0];
   $('#codeShow').textContent = code;
   $('#hostBox').hidden = false;
-  if (await goOnline('host', code)) $('#lobbyStatus').textContent = 'Tell your friend this code, then wait here.';
+  $('#btnHost').hidden = true;
+  $('#btnStart').disabled = true;
+  if (!(await goOnline('host', code))) return;
+  U.online.roster = [{ id: deviceId(), name: store.get('name', 'Player 1') || 'Player 1' }];
+  sendRoster();
+}
+
+function startOnlineGame() {
+  const o = U.online;
+  if (!o || o.role !== 'host' || G || o.roster.length < 2) return;
+  sound.click();
+  const roster = o.roster.slice(0, MAX_ONLINE);
+  G = newGame('online', roster.map((r) => r.name), [...Array(HOLES.length).keys()], { simul: store.get('onlineSimul', true) });
+  G.ids = roster.map((r) => r.id);
+  U.local = [0];
+  save();
+  o.link.send({ t: 'start', game: G });
+  startPlay();
 }
 
 async function joinGame() {
@@ -1382,10 +1522,11 @@ async function joinGame() {
   }
   G = null;
   U.local = [1];
+  $('#hostBox').hidden = true;
   if (!(await goOnline('guest', code))) return;
   $('#lobbyStatus').textContent = `Joining game ${code}…`;
   const o = U.online;
-  const hello = () => o.link.send({ t: 'hello', name: store.get('name', 'Player 2') });
+  const hello = () => o.link.send({ t: 'hello', name: store.get('name', '') || 'Player' });
   hello();
   o.helloTimer = setInterval(() => (G ? clearInterval(o.helloTimer) : hello()), 2000);
 }
@@ -1400,13 +1541,14 @@ async function rejoin() {
     return;
   }
   G = saved.game;
-  U.local = [saved.role === 'host' ? 0 : 1];
+  const idx = G.ids ? G.ids.indexOf(deviceId()) : -1;
+  U.local = [idx >= 0 ? idx : saved.role === 'host' ? 0 : 1];
   setScreen('lobby');
   $('#lobbyStatus').textContent = `Reconnecting to game ${saved.code}…`;
   if (!(await goOnline(saved.role, saved.code))) return;
   startPlay();
   U.online.link.send({ t: 'sync-req', name: store.get('name', '') });
-  if (saved.role === 'guest') U.online.link.send({ t: 'hello', name: store.get('name', 'Player 2') });
+  if (saved.role === 'guest') U.online.link.send({ t: 'hello', name: store.get('name', '') });
 }
 
 function leaveOnline() {
@@ -1743,7 +1885,9 @@ on('#btnOnline', () => {
   sound.click();
   $('#nameInput').value = store.get('name', '');
   $('#hostBox').hidden = true;
-  $('#lobbyStatus').textContent = 'Both iPads need an internet connection. Any Wi‑Fi works.';
+  $('#btnHost').hidden = false;
+  $('#roster').hidden = true;
+  $('#lobbyStatus').textContent = `Up to ${MAX_ONLINE} players. Every iPad needs internet, on any Wi‑Fi or mobile data.`;
   refreshModeButtons();
   setScreen('lobby');
 });
@@ -1783,6 +1927,7 @@ on('#btnSound', () => {
 });
 on('#btnHost', hostGame);
 on('#btnJoin', joinGame);
+on('#btnStart', startOnlineGame);
 on('#btnLobbyBack', () => {
   sound.click();
   leaveOnline();

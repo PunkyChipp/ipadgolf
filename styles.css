@@ -108,6 +108,10 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--gold); outl
 .chip .nm { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip .st { font-family: var(--display); font-weight: 400; font-size: 18px; }
 .chip .rl { color: var(--muted); }
+.chips.many { gap: 5px; }
+.chips.many .chip { gap: 5px; padding: 4px 9px 4px 6px; font-size: 13px; }
+.chips.many .chip .nm { max-width: 64px; }
+.chips.many .chip .st { font-size: 16px; }
 .hud-right { display: flex; align-items: center; gap: 10px; }
 .wind { display: flex; align-items: center; gap: 6px; }
 .wind svg { width: 40px; height: 40px; }
@@ -451,6 +455,11 @@ input {
 .host-box small { font-size: 12px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
 .code { font-family: var(--display); font-size: 58px; letter-spacing: 0.12em; color: var(--gold); line-height: 1.1; }
 .code-input { font-family: var(--display); font-weight: 400; font-size: 34px; text-align: center; letter-spacing: 0.2em; text-transform: uppercase; }
+.host-box .btn { margin-top: 10px; width: 100%; }
+.btn:disabled { opacity: 0.45; pointer-events: none; }
+.roster { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.roster li { display: flex; align-items: center; gap: 8px; padding: 7px 14px 7px 10px; border-radius: 999px; background: rgba(255, 255, 255, 0.08); font-weight: 800; }
+.roster small { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
 .status { margin: 0; min-height: 1.4em; color: var(--text); font-weight: 800; }
 @media (max-width: 560px) { .lobby-grid { grid-template-columns: 1fr; } }
 
