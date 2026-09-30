@@ -39,17 +39,17 @@ No build step and no dependencies: plain HTML, CSS and JavaScript modules.
 
 Pin positions and wind change every game.
 
-## Two players
+## Playing together
 
-- **One iPad:** take turns; the game asks you to pass the iPad when the player changes.
-- **Two iPads:** one player taps *Create game* and reads out the 4-letter code; the other enters it and taps *Join game*. The iPads can be on different Wi-Fi networks or on mobile data; they just need internet. If an iPad reloads or drops out, tap *Rejoin online game* on the title screen.
+- **One iPad, two players:** take turns; the game asks you to pass the iPad when the player changes.
+- **Online, up to 4 players:** one player taps *Create game* and reads out the 4-letter code. Everyone else enters it and taps *Join game*, and the host taps *Start game* once everyone's name shows in the lobby. The iPads can be on different Wi-Fi networks or on mobile data; they just need internet. If an iPad reloads or drops out, tap *Rejoin online game* on the title screen and it gets its seat back.
 
 The host picks how online games run:
 
-- **Same time** (default): you each play your own ball without waiting. You see the other player's shots as they happen, and the next hole starts when you've both holed out.
+- **Same time** (default): everyone plays their own ball without waiting. You see the other players' shots as they happen, and the next hole starts when you've all holed out.
 - **Take turns:** normal golf order. Everyone tees off in honour order (lowest score on the last hole first), then whoever is furthest from the hole plays.
 
-Same-iPad games always take turns.
+Every few seconds the iPads compare how many shots each player has taken. If one missed a shot (say, because it slept for a moment), it fetches the latest state from the others, so nobody gets stuck waiting.
 
 Online play relays small messages through free public MQTT servers (HiveMQ and EMQX, both at once for reliability) using a topic named after the game code. There's no account and no server of our own. Anyone who knew your code could see the shots, which is fine for a golf game.
 

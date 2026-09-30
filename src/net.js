@@ -36,9 +36,9 @@ function loadLib() {
 }
 
 export class Link {
-  constructor(code, { onMessage, onStatus }) {
+  constructor(code, { id, onMessage, onStatus }) {
     this.code = code;
-    this.id = Math.random().toString(36).slice(2, 10);
+    this.id = id || Math.random().toString(36).slice(2, 10);
     this.onMessage = onMessage;
     this.onStatus = onStatus;
     this.clients = [];
