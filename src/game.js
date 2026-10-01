@@ -1,11 +1,11 @@
-import { buildHole as buildHoleRaw, windFor, HOLES, COURSES, courseOf, T, TERRAIN_NAMES } from './course.js?v=10';
+import { buildHole as buildHoleRaw, windFor, HOLES, COURSES, courseOf, T, TERRAIN_NAMES } from './course.js?v=11';
 import {
   simulateShot, CLUBS, PUTTER, PUTT_SCALES, SHAPES, FULL_SHAPES, SHORT_SHAPES, GEAR, GEAR_STATS, DEFAULT_GEAR, gearFor, MISHIT, meterWindow, lieEffect, suggestClub, suggestPuttScale, shotSeed, shotLabel, previewShot, flightParams, flightPoint,
-} from './sim.js?v=10';
-import { Renderer } from './render.js?v=10';
-import { Sound } from './audio.js?v=10';
-import { Link, makeCode, cleanCode } from './net.js?v=10';
-import { View3D, parseColor } from './view3d.js?v=10';
+} from './sim.js?v=11';
+import { Renderer } from './render.js?v=11';
+import { Sound } from './audio.js?v=11';
+import { Link, makeCode, cleanCode } from './net.js?v=11';
+import { View3D, parseColor } from './view3d.js?v=11';
 
 const $ = (s) => document.querySelector(s);
 
@@ -304,7 +304,7 @@ function spinMag() {
 
 function spinName(sp) {
   const v = sp.y > 0.2 ? 'Topspin' : sp.y < -0.2 ? 'Backspin' : '';
-  const h = sp.x > 0.2 ? 'fade' : sp.x < -0.2 ? 'draw' : '';
+  const h = sp.x > 0.7 ? 'slice' : sp.x > 0.2 ? 'fade' : sp.x < -0.7 ? 'hook' : sp.x < -0.2 ? 'draw' : '';
   if (v && h) return `${v} + ${h}`;
   if (v) return v;
   if (h) return h[0].toUpperCase() + h.slice(1);
@@ -344,10 +344,18 @@ function meterScale() {
   return tp < 0.6 ? Math.max(0.1, tp / 0.7) : 1;
 }
 
+// Shaped shots start offline and bend back: aim the start line so that, with
+// no wind and a pure strike, the curve brings the ball onto the target line.
+function startLine(power) {
+  if (CLUBS[U.club].putter || Math.abs(U.spin.x) < 0.01) return U.aim;
+  const fp = flightParams(currentBall(), { club: U.club, aim: U.aim, power, acc: 0, shape: U.shape, spin: U.spin, gear: myGear() }, CALM);
+  return U.aim - Math.atan2(fp.curve, fp.carry);
+}
+
 function shotInput(power, acc) {
   const putter = CLUBS[U.club].putter;
   return {
-    club: U.club, aim: U.aim, power, acc, puttScale: U.puttScale,
+    club: U.club, aim: startLine(power), power, acc, puttScale: U.puttScale,
     shape: putter ? 0 : U.shape, spin: putter ? { x: 0, y: 0 } : { ...U.spin }, gear: myGear(),
   };
 }
@@ -743,6 +751,9 @@ function fireEvent(ev, a) {
       break;
     case 'lip':
       sound.lip();
+      break;
+    case 'bounce':
+      if (ev.v > 2) sound.land(ev.terrain === T.GREEN || ev.terrain === T.FRINGE ? 'green' : ev.terrain === T.SAND ? 'sand' : ev.terrain === T.ROUGH || ev.terrain === T.DEEP ? 'rough' : 'fairway');
       break;
     case 'spinback':
       if (mine || !G.simul) popup('Spin back!', '#9fe3ff', 1.4, 28);
@@ -2453,6 +2464,16 @@ $('#rangeBtn').addEventListener('click', () => {
   el.addEventListener('pointercancel', end);
 }
 
+// Tap the shape name to cycle preset shapes; the spin ball fine-tunes them.
+const SHAPE_PRESETS = [0, -0.45, -0.9, 0.45, 0.9];
+$('#spinLabel').addEventListener('click', () => {
+  if (U.phase !== 'aim' || U.swing.phase !== 'idle' || CLUBS[U.club].putter) return;
+  const i = SHAPE_PRESETS.findIndex((v) => Math.abs(v - U.spin.x) < 0.05);
+  U.spin = { x: SHAPE_PRESETS[(i + 1) % SHAPE_PRESETS.length], y: U.spin.y };
+  sound.click();
+  updatePanel();
+});
+
 $('#shapeBtn').addEventListener('click', () => {
   if (U.phase !== 'aim' || U.swing.phase !== 'idle') return;
   const list = shapeList();
@@ -2476,6 +2497,8 @@ function refreshViewBtn() {
   $('#viewBtn').textContent = store.get('view3d', true) ? '2D' : '3D';
 }
 refreshViewBtn();
+// Three.js loads in the background; switch the 3D view on once it is ready.
+V3.ready.then(() => { refreshViewBtn(); U.cam3 = null; U.nearKey = null; });
 $('#mapBtn').addEventListener('click', () => {
   U.mapView = !U.mapView;
   $('#mapBtn').classList.toggle('on', U.mapView);

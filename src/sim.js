@@ -1,6 +1,6 @@
 // Shot simulation. Pure and deterministic: the same inputs and seed always
 // give the same result, so two iPads can replay each other's shots exactly.
-import { T, TERRAIN_NAMES, rng, hashSeed } from './course.js?v=10';
+import { T, TERRAIN_NAMES, rng, hashSeed } from './course.js?v=11';
 
 export const G = 10.72; // gravity, yards/s²
 export const CUP_R = 0.075; // a little larger than a real cup (0.059 yd)
@@ -256,15 +256,110 @@ export function simulateShot(hole, ball, input, wind, seed) {
   // Side spin kicks the ball sideways as it lands.
   const kick = fp.spin.x * 0.22;
   [hx, hy] = [hx * Math.cos(kick) - hy * Math.sin(kick), hx * Math.sin(kick) + hy * Math.cos(kick)];
-  if (rollDist < 0) {
-    hx = -hx;
-    hy = -hy;
-    rollDist = -rollDist;
-    if (rollDist > 0.8) res.events.push({ type: 'spinback', f: frames.length - 1 });
-  }
-  const v0 = Math.sqrt(2 * decelAt(hole, land) * rollDist);
-  roll(hole, last.x, last.y, hx * v0, hy * v0, frames, res, Math.min(apex * 0.06, 1.6));
+  // How the ball arrives: steeper for high shots, flatter for drivers and
+  // punches; faster for longer shots.
+  const descent = Math.min(1.2, Math.max(0.1, Math.atan((5 * apex) / Math.max(carry, 1))));
+  const inH = (0.6 * carry) / Math.max(0.6, flight);
+  bounceAndRoll(hole, last.x, last.y, hx, hy, rollDist, land, inH * Math.tan(descent), frames, res, mishit);
   return finish(hole, ball, res);
+}
+
+// Surface bounce: e = how much vertical speed survives a bounce, mu = how
+// much forward speed each bounce takes away. Sand plugs; greens are soft;
+// firm links fairways are lively.
+const BOUNCE = {
+  [T.GREEN]: { e: 0.2, mu: 0.3 },
+  [T.FRINGE]: { e: 0.24, mu: 0.26 },
+  [T.FAIRWAY]: { e: 0.36, mu: 0.14 },
+  [T.TEE]: { e: 0.34, mu: 0.15 },
+  [T.ROUGH]: { e: 0.16, mu: 0.4 },
+  [T.DEEP]: { e: 0.08, mu: 0.6 },
+  [T.SAND]: { e: 0.03, mu: 0.85 },
+  [T.OB]: { e: 0.2, mu: 0.3 },
+};
+
+function bounceOf(hole, ter) {
+  const b = BOUNCE[ter] || BOUNCE[T.ROUGH];
+  if (hole.firm > 1 && (ter === T.FAIRWAY || ter === T.FRINGE)) return { e: b.e * 1.25, mu: b.mu * 0.7 };
+  return b;
+}
+
+// Distance covered by bounces then roll, on flat ground of one surface, for
+// a forward speed vh just after the first bounce.
+function runDistance(hole, ter, vh, vz) {
+  const { e, mu } = bounceOf(hole, ter);
+  let d = 0;
+  for (let k = 0; k < 8 && vz > 1.1; k++) {
+    d += vh * ((2 * vz) / G);
+    vh *= 1 - mu;
+    vz *= e;
+  }
+  return d + (vh * vh) / (2 * decelAt(hole, ter));
+}
+
+// Bounce, then roll. The forward speed after the first bounce is chosen so
+// the total run matches `run` (negative = spin pulls it back), keeping the
+// game's tuned distances while the motion is real.
+function bounceAndRoll(hole, x, y, hx, hy, run, land, inV, frames, res, mishit) {
+  const back = run < 0;
+  let { e } = bounceOf(hole, land);
+  let vz = inV * e * (mishit ? 0.6 : 1);
+  let dirx = hx, diry = hy;
+  let vh;
+  if (back) {
+    // Check, then zip back: a short hop forward, then the spin bites.
+    vh = Math.min(2, inV * 0.12);
+  } else {
+    let lo = 0, hi = 80;
+    for (let i = 0; i < 30; i++) {
+      const mid = (lo + hi) / 2;
+      if (runDistance(hole, land, mid, vz) < run) lo = mid;
+      else hi = mid;
+    }
+    vh = lo;
+  }
+  let ter = land;
+  for (let k = 0; k < 10 && vz > 1.1; k++) {
+    const t = (2 * vz) / G;
+    const n = Math.max(2, Math.round(t * FPS));
+    for (let i = 1; i <= n; i++) {
+      const tt = (i / n) * t;
+      frames.push({ x: x + dirx * vh * tt, y: y + diry * vh * tt, z: vz * tt - 0.5 * G * tt * tt });
+    }
+    x += dirx * vh * t;
+    y += diry * vh * t;
+    ter = hole.terrainAt(x, y);
+    if (ter === T.WATER || ter === T.OB) {
+      res.landedOn = ter;
+      res.rolledInto = ter;
+      return;
+    }
+    // Dropping straight into the cup on a gentle bounce.
+    if (ter === T.GREEN && Math.hypot(x - hole.pin.x, y - hole.pin.y) < CUP_R * 1.3 && vz < 3) {
+      frames.push({ x: hole.pin.x, y: hole.pin.y, z: 0 });
+      res.outcome = 'holed';
+      return;
+    }
+    res.events.push({ type: 'bounce', f: frames.length - 1, terrain: ter, v: vz });
+    const b = bounceOf(hole, ter);
+    vz *= b.e;
+    vh *= 1 - b.mu;
+    if (back && k === 0) {
+      // The spin takes hold: reverse, with enough pace to cover the zip back.
+      dirx = -dirx;
+      diry = -diry;
+      const want = -run + vh * ((2 * vz) / G) * 0.5;
+      let lo = 0, hi = 30;
+      for (let i = 0; i < 24; i++) {
+        const mid = (lo + hi) / 2;
+        if (runDistance(hole, ter, mid, vz) < want) lo = mid;
+        else hi = mid;
+      }
+      vh = lo;
+      if (-run > 0.8) res.events.push({ type: 'spinback', f: frames.length - 1 });
+    }
+  }
+  roll(hole, x, y, dirx * vh, diry * vh, frames, res, 0);
 }
 
 // Ground roll with surface friction, green slopes and the cup.
@@ -405,7 +500,8 @@ export function flightParams(ball, input, wind, r = () => 0.5) {
 
 export function flightPoint(ball, fp, s) {
   const alongD = fp.carry * (1 - Math.pow(1 - s, 1.6));
-  const lat = fp.push * alongD + fp.curve * s * s + fp.drift * Math.pow(s, 1.5);
+  // Curve builds late in the flight, as the ball slows and the spin takes over.
+  const lat = fp.push * alongD + fp.curve * Math.pow(s, 2.3) + fp.drift * Math.pow(s, 1.5);
   const sp = Math.pow(s, 1.25);
   return {
     x: ball.x + fp.dx * alongD + fp.rx * lat,

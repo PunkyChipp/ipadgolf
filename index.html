@@ -16,7 +16,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;800&display=swap">
-<link rel="stylesheet" href="styles.css?v=10">
+<link rel="stylesheet" href="styles.css?v=11">
 </head>
 <body>
 <canvas id="game3d" aria-hidden="true"></canvas>
@@ -61,7 +61,7 @@
     <div class="aim-box">
       <div class="spin-col">
         <div id="spinBall" class="spin-ball" role="slider" aria-label="Spin: tap the ball where you want to strike it"><i id="spinDot"></i></div>
-        <span id="spinLabel" class="spin-label">No spin</span>
+        <button id="spinLabel" class="spin-label" aria-label="Shot shape: tap to change">Straight</button>
       </div>
       <div class="aim-btns">
         <button id="aimLeft" class="icon-btn" aria-label="Aim left"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg></button>
@@ -266,7 +266,9 @@
       </div>
       <div>
         <h3>Spin</h3>
-        <p>Tap or drag on the little ball where you want to strike it. Low is backspin (stops quickly; wedges can zip back), high is topspin (lower and more roll), and left or right draws or fades it. The aim guide bends to show it. Spin makes the timing window a little tighter. Double-tap the ball to clear it.</p>
+        <p>Tap or drag on the little ball where you want to strike it. Low is backspin (stops quickly; wedges can zip back), high is topspin (lower and more roll), and left or right draws or fades it. Tap the shape name under the ball to step through <b>Straight, Draw, Hook, Fade and Slice</b>. A shaped shot starts out to one side and curves back to your target, and the aim guide shows the whole path. Spin makes the timing window a little tighter. Double-tap the ball to clear it.</p>
+        <h3>Bounces</h3>
+        <p>The ball bounces before it rolls, depending on what it lands on. Fairways and firm links ground kick it on, greens take a hop and check, rough grabs it, and sand plugs it. Steep, high shots stop quicker than low runners.</p>
       </div>
       <div>
         <h3>Your bag</h3>
@@ -297,6 +299,6 @@
   </div>
 </section>
 
-<script type="module" src="src/game.js?v=10"></script>
+<script type="module" src="src/game.js?v=11"></script>
 </body>
 </html>
