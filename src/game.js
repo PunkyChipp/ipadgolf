@@ -28,7 +28,7 @@ const TAU = Math.PI * 2;
 const COLORS = ['#e8433a', '#2f7de1', '#f2b705', '#a45de0'];
 const MAX_ONLINE = 4;
 // Bump when online messages change, so mismatched copies of the game say so instead of stalling.
-const NET_VERSION = 4;
+const NET_VERSION = 5;
 const METER_MIN = -0.15;
 const METER_MAX = 1.1;
 const DIFFICULTY = { casual: 1.5, standard: 1, pro: 0.72 };
@@ -642,7 +642,10 @@ function takeShot(power, acc) {
   const input = shotInput(power, acc);
   if (!CLUBS[U.club].putter) sound.whoosh(power);
   const res = simulateShot(hole, pl.ball, input, wind, shotSeed(G.seed, pl.h, p, pl.shots));
-  if (U.online) U.online.link.send({ t: 'shot', p, k: pl.shots, h: pl.h, input, name: pl.name });
+  // The shooter's device is the authority on where the ball ends up: other
+  // devices replay the shot for the animation, but floating-point maths can
+  // differ between iPads, so they take this result as final.
+  if (U.online) U.online.link.send({ t: 'shot', p, k: pl.shots, h: pl.h, input, name: pl.name, out: { final: res.final, outcome: res.outcome, penalty: res.penalty } });
   U.swing = { phase: 'idle' };
   startAnim(p, input, res);
 }
@@ -1991,12 +1994,18 @@ function onNetMessage(msg) {
       if (G) sendSync();
       break;
     case 'sync':
-      merge(msg.game);
+      merge(msg.game, msg.from);
       break;
     case 'ping':
       if (G && msg.seed === G.seed && Array.isArray(msg.shots)) {
         // Anyone further along than us: ask for their copy. Anyone behind: send ours.
-        const behind = msg.shots.some((k, i) => G.players[i] && k > G.players[i].shots + (animFor(i) ? 1 : 0));
+        let behind = msg.shots.some((k, i) => G.players[i] && k > G.players[i].shots + (animFor(i) ? 1 : 0));
+        // Same shot count but a different idea of where the sender's own
+        // player is (or whether they've holed out): the sender is right.
+        if (Array.isArray(msg.sigs) && G.ids)
+          msg.sigs.forEach((sg, i) => {
+            if (sg && G.ids[i] === msg.from && G.players[i] && !animFor(i) && msg.shots[i] === G.players[i].shots && sg !== playerSig(G.players[i])) behind = true;
+          });
         const ahead = msg.shots.some((k, i) => G.players[i] && k < G.players[i].shots);
         if (behind) requestSync();
         if (ahead) sendSync();
@@ -2059,14 +2068,43 @@ function requestSync() {
   U.online.link.send({ t: 'sync-req' });
 }
 
-// Take the other device's copy of any player that is further along than ours.
-function merge(remote) {
+// Make a locally replayed shot finish exactly where the shooter's device
+// says it did. If the replay drifted, the ball glides to the true spot.
+function adoptResult(res, out) {
+  const f = out.final;
+  if (!f) return;
+  const last = res.frames[res.frames.length - 1];
+  const off = Math.hypot(last.x - f.x, last.y - f.y);
+  if (off > 0.01) {
+    const n = Math.min(40, Math.max(6, Math.round(off * 8)));
+    for (let i = 1; i <= n; i++) {
+      const k = i / n, e = k * k * (3 - 2 * k);
+      res.frames.push({ x: last.x + (f.x - last.x) * e, y: last.y + (f.y - last.y) * e, z: (last.z || 0) * (1 - k) });
+    }
+  }
+  if (res.outcome !== out.outcome) res.events = res.events.filter((e) => e.type !== 'dunk');
+  res.final = f;
+  res.outcome = out.outcome;
+  res.penalty = out.penalty;
+}
+
+// A short fingerprint of a player's state, to spot copies that disagree
+// even though they have the same number of shots.
+function playerSig(pl) {
+  const b = pl.ball || { x: 0, y: 0 };
+  return `${pl.h}|${pl.holed ? 1 : 0}|${pl.strokes}|${Math.round(b.x * 4)},${Math.round(b.y * 4)}`;
+}
+
+// Take the other device's copy of any player that is further along than ours,
+// and the owner's copy of their own player when ours disagrees with it.
+function merge(remote, from) {
   if (!G || !remote || remote.seed !== G.seed) return;
   const prevH = G.h;
   let changed = false;
   remote.players.forEach((rp, i) => {
     if (!G.players[i] || animFor(i)) return;
-    if (rp.shots > G.players[i].shots) {
+    const owner = from && G.ids && G.ids[i] === from;
+    if (rp.shots > G.players[i].shots || (owner && rp.shots === G.players[i].shots && playerSig(rp) !== playerSig(G.players[i]))) {
       G.players[i] = rp;
       changed = true;
     }
@@ -2109,6 +2147,7 @@ function processQueue() {
     if (!G.simul && U.anims.length) continue;
     U.queue.splice(qi--, 1);
     const res = simulateShot(hole, pl.ball, msg.input, wind, shotSeed(G.seed, pl.h, msg.p, pl.shots));
+    if (msg.out) adoptResult(res, msg.out);
     startAnim(msg.p, msg.input, res);
   }
 }
@@ -2168,7 +2207,10 @@ async function goOnline(role, code) {
   clearInterval(o.pingTimer);
   o.pingTimer = setInterval(() => {
     if (U.online !== o) return;
-    o.link.send({ t: 'ping', seed: G ? G.seed : 0, shots: G ? G.players.map((p) => p.shots) : [], name: store.get('name', '') });
+    o.link.send({
+      t: 'ping', seed: G ? G.seed : 0, shots: G ? G.players.map((p) => p.shots) : [], name: store.get('name', ''),
+      sigs: G ? G.players.map((p, i) => (isLocal(i) ? playerSig(p) : null)) : [],
+    });
     if (o.role === 'host' && !G) {
       // Drop anyone who left the lobby without saying so.
       const before = o.roster.length;
