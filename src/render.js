@@ -9,7 +9,7 @@ const PXG = 16; // pixels per yard for the green layer
 const TAU = Math.PI * 2;
 const FRINGE_W = 2.6;
 
-const C = {
+const LINKS_C = {
   ob: '#2c5427',
   deep: '#3d7534',
   rough: '#4f913f',
@@ -23,6 +23,21 @@ const C = {
   waterDeep: '#1d5f99',
   tee: '#86cc68',
 };
+// Augusta: deeper emerald grass, brilliant white sand.
+const AUGUSTA_C = {
+  ...LINKS_C,
+  ob: '#24502a',
+  deep: '#336e33',
+  rough: '#4b9440',
+  fairway: '#62b44c',
+  fairwayStripe: 'rgba(255,255,255,0.09)',
+  fringe: '#6fbc55',
+  green: '#7fd062',
+  sand: '#f7f5ee',
+  sandDark: '#d8d2c1',
+  tee: '#7fc962',
+};
+let C = LINKS_C;
 
 function ellipsePath(ctx, e, grow = 0) {
   ctx.beginPath();
@@ -67,6 +82,7 @@ export class Renderer {
 
   setHole(hole) {
     this.hole = hole;
+    C = hole.course === 'augusta' ? AUGUSTA_C : LINKS_C;
     const pad = hole.bounds + 45;
     const xs = hole.path.map((p) => p.x), ys = hole.path.map((p) => p.y);
     const box = { x: Math.min(...xs) - pad, y: Math.min(...ys) - pad };
@@ -248,6 +264,21 @@ export class Renderer {
       c.restore();
     }
 
+    // Stone footbridges over the creeks.
+    for (const br of hole.bridges) {
+      c.save();
+      c.translate(br.x, br.y);
+      c.rotate(br.ang);
+      c.fillStyle = 'rgba(0,0,0,0.3)';
+      c.fillRect(-br.len / 2 + 0.3, -1.1 + 0.4, br.len, 2.2);
+      c.fillStyle = '#cfc8b8';
+      c.fillRect(-br.len / 2, -1.1, br.len, 2.2);
+      c.fillStyle = '#a79f8c';
+      c.fillRect(-br.len / 2, -1.1, br.len, 0.35);
+      c.fillRect(-br.len / 2, 0.75, br.len, 0.35);
+      c.restore();
+    }
+
     // Bunkers: sand with a shaded lip.
     for (const b of hole.bunkers) {
       ellipsePath(c, b, 0.6);
@@ -292,8 +323,44 @@ export class Renderer {
       }
     }
 
-    // Trees: shadows first, then canopies.
+    // Trees: pine straw beds, shadows, then canopies.
     const trees = hole.trees.filter((tr) => tr.x + tr.r > box.x && tr.x - tr.r < box.x + box.w && tr.y + tr.r > box.y && tr.y - tr.r < box.y + box.h);
+    if (trees.some((tr) => tr.pine)) {
+      // Overlapping discs merge into continuous beds of straw under the pines.
+      c.fillStyle = '#6a6038';
+      c.beginPath();
+      for (const tr of trees) {
+        if (!tr.pine) continue;
+        c.moveTo(tr.x + tr.r * 2, tr.y);
+        c.arc(tr.x, tr.y, tr.r * 2, 0, TAU);
+      }
+      c.fill('nonzero');
+      c.fillStyle = 'rgba(160,120,70,0.5)';
+      for (const tr of trees) {
+        if (!tr.pine) continue;
+        for (let i = 0; i < 6; i++) c.fillRect(tr.x + (r() - 0.5) * tr.r * 2.4, tr.y + (r() - 0.5) * tr.r * 2.4, 0.5, 0.18);
+      }
+    }
+    // Azalea beds: dark bushes covered in pink, magenta and white blooms.
+    for (const f of hole.flowers) {
+      ellipsePath(c, f, 0.8);
+      c.fillStyle = 'rgba(0,0,0,0.25)';
+      c.fill();
+      ellipsePath(c, f);
+      c.fillStyle = '#2e5a2a';
+      c.fill();
+      const blooms = ['#ff5fa2', '#e0307f', '#ff8fbf', '#ffffff', '#ff6f6f', '#c2185b'];
+      const n = Math.round(f.rx * f.ry * 2.4);
+      for (let i = 0; i < n; i++) {
+        const a = r() * TAU, d = Math.sqrt(r());
+        const u = Math.cos(a) * f.rx * d, v = Math.sin(a) * f.ry * d;
+        const rot = f.rot || 0;
+        c.fillStyle = blooms[Math.floor(r() * blooms.length)];
+        c.beginPath();
+        c.arc(f.x + u * Math.cos(rot) - v * Math.sin(rot), f.y + u * Math.sin(rot) + v * Math.cos(rot), 0.45 + r() * 0.5, 0, TAU);
+        c.fill();
+      }
+    }
     c.fillStyle = 'rgba(0,0,0,0.28)';
     for (const tr of trees) {
       c.beginPath();
@@ -361,52 +428,78 @@ export class Renderer {
     return [p.x, p.y];
   }
 
+  // The aim guide: the flight's ground track (dashed) to a landing ring, then
+  // the predicted roll (dotted) to where the ball stops. Putts show only the
+  // first part of their path.
   drawAim(aim, scale) {
     const ctx = this.ctx;
-    const { x, y, dir, len, ticks, ring, color } = aim;
-    const dx = Math.cos(dir), dy = Math.sin(dir);
     const px = 1 / scale;
-    // The guide is a straight line, or the curved path when side spin is on.
-    const pts = aim.path || [[x, y, 0], [x + dx * len, y + dy * len, 1]];
-    const trace = () => {
+    const color = aim.color || 'rgba(255,255,255,0.92)';
+    const trace = (pts) => {
       ctx.beginPath();
       ctx.moveTo(pts[0][0], pts[0][1]);
       for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
     };
-    const at = (f) => {
-      for (let i = 1; i < pts.length; i++) {
-        if (pts[i][2] >= f) {
-          const a = pts[i - 1], b = pts[i];
-          const k = (f - a[2]) / (b[2] - a[2] || 1);
-          return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k];
-        }
-      }
-      return [pts[pts.length - 1][0], pts[pts.length - 1][1]];
-    };
     ctx.save();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
-    ctx.lineWidth = 4 * px;
-    trace();
-    ctx.stroke();
-    ctx.setLineDash([8 * px, 7 * px]);
-    ctx.strokeStyle = color || 'rgba(255,255,255,0.9)';
-    ctx.lineWidth = 2 * px;
-    trace();
-    ctx.stroke();
-    ctx.setLineDash([]);
-    for (const t of ticks || []) {
-      const [tx, ty] = at(t);
-      ctx.beginPath();
-      ctx.moveTo(tx - dy * 6 * px, ty + dx * 6 * px);
-      ctx.lineTo(tx + dy * 6 * px, ty - dx * 6 * px);
+    if (aim.flight && aim.flight.length > 1) {
+      ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+      ctx.lineWidth = 4 * px;
+      trace(aim.flight);
       ctx.stroke();
+      ctx.setLineDash([8 * px, 7 * px]);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2 * px;
+      trace(aim.flight);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
-    if (ring) {
-      const [ex, ey] = at(1);
-      const rr = Math.max(ring, 9 * px);
-      ctx.fillStyle = 'rgba(255,255,255,0.14)';
+    if (aim.roll && aim.roll.length > 1) {
+      ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+      ctx.lineWidth = (aim.putt ? 5 : 4) * px;
+      trace(aim.roll);
+      ctx.stroke();
+      ctx.setLineDash([1 * px, 6 * px]);
+      ctx.strokeStyle = aim.putt ? '#fff6c2' : color;
+      ctx.lineWidth = (aim.putt ? 4 : 3) * px;
+      trace(aim.roll);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      if (aim.putt) {
+        // Arrowhead showing which way the putt is heading.
+        const n = aim.roll.length;
+        const [x1, y1] = aim.roll[n - 1], [x0, y0] = aim.roll[Math.max(0, n - 3)];
+        const a = Math.atan2(y1 - y0, x1 - x0);
+        ctx.fillStyle = '#fff6c2';
+        ctx.beginPath();
+        ctx.moveTo(x1 + Math.cos(a) * 7 * px, y1 + Math.sin(a) * 7 * px);
+        ctx.lineTo(x1 + Math.cos(a + 2.5) * 7 * px, y1 + Math.sin(a + 2.5) * 7 * px);
+        ctx.lineTo(x1 + Math.cos(a - 2.5) * 7 * px, y1 + Math.sin(a - 2.5) * 7 * px);
+        ctx.fill();
+      }
+    }
+    if (aim.end) {
+      const { x, y } = aim.end;
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = 3.5 * px;
+      ctx.beginPath();
+      ctx.arc(x, y, 5 * px, 0, TAU);
+      ctx.stroke();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2 * px;
+      ctx.stroke();
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(x, y, 1.6 * px, 0, TAU);
+      ctx.fill();
+    }
+    if (aim.ring && aim.flight) {
+      const [ex, ey] = aim.flight[aim.flight.length - 1];
+      const rr = Math.max(aim.ring, 10 * px);
+      ctx.fillStyle = 'rgba(255,255,255,0.16)';
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2 * px;
       ctx.beginPath();
       ctx.arc(ex, ey, rr, 0, TAU);
       ctx.fill();
@@ -415,6 +508,23 @@ export class Renderer {
       ctx.arc(ex, ey, 2.5 * px, 0, TAU);
       ctx.fillStyle = '#fff';
       ctx.fill();
+      if (aim.label) {
+        // Carry yardage in a little tag beside the ring, kept upright on screen.
+        const m = ctx.getTransform();
+        const p = m.transformPoint(new DOMPoint(ex, ey));
+        ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+        const sx = p.x / this.dpr, sy = p.y / this.dpr;
+        const rs = rr * scale;
+        ctx.font = '800 13px "Nunito", ui-rounded, system-ui, sans-serif';
+        const w = ctx.measureText(aim.label).width + 12;
+        ctx.fillStyle = 'rgba(10,30,16,0.75)';
+        roundRect(ctx, sx + rs + 4, sy - 10, w, 20, 10);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(aim.label, sx + rs + 10, sy + 0.5);
+      }
     }
     ctx.restore();
   }
@@ -608,6 +718,7 @@ function roundRect(c, x, y, w, h, r) {
 }
 
 function drawTree(c, t) {
+  if (t.pine) return drawPine(c, t);
   const pal = t.shade < 0.33 ? ['#1d4a22', '#2b6a2f', '#3f8a3c'] : t.shade < 0.66 ? ['#224f1f', '#32712c', '#4b923a'] : ['#1a4630', '#27664a', '#3a8660'];
   const r = t.r;
   c.fillStyle = pal[0];
@@ -628,4 +739,25 @@ function drawTree(c, t) {
   c.beginPath();
   c.arc(t.x - r * 0.3, t.y - r * 0.32, r * 0.3, 0, TAU);
   c.fill();
+}
+
+// Loblolly pines seen from above: a dark, spiky crown with lighter tips.
+function drawPine(c, t) {
+  const r = t.r;
+  const pal = t.shade < 0.5 ? ['#173d24', '#245535', '#3a7448'] : ['#1b4322', '#2a5e2e', '#437c3e'];
+  const spikes = 9;
+  for (let layer = 0; layer < 3; layer++) {
+    const rr = r * (1 - layer * 0.28);
+    c.fillStyle = pal[layer];
+    c.beginPath();
+    for (let k = 0; k <= spikes * 2; k++) {
+      const a = t.shade * 7 + layer * 0.35 + (k * Math.PI) / spikes;
+      const d = k % 2 ? rr * 0.62 : rr;
+      const x = t.x - layer * r * 0.08 + Math.cos(a) * d, y = t.y - layer * r * 0.1 + Math.sin(a) * d;
+      if (k) c.lineTo(x, y);
+      else c.moveTo(x, y);
+    }
+    c.closePath();
+    c.fill();
+  }
 }

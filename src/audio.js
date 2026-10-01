@@ -145,6 +145,16 @@ export class Sound {
     if (level >= 2) this.noise({ dur: 1.2, vol: 0.06, freq: 900, q: 0.4, at: 0.4, attack: 0.3 });
   }
 
+  // A gallery roar that swells and fades: bigger for better shots.
+  roar(level = 1) {
+    if (!this.ready) return;
+    const dur = 1.6 + level * 0.9;
+    this.noise({ dur, vol: 0.05 + level * 0.03, freq: 520, q: 0.7, attack: 0.18 + level * 0.05 });
+    this.noise({ dur: dur * 0.9, vol: 0.03 + level * 0.02, freq: 1150, q: 1.1, at: 0.08, attack: 0.25 });
+    this.noise({ dur: dur * 0.7, vol: 0.02 + level * 0.015, freq: 260, q: 0.9, at: 0.05, attack: 0.3 });
+    this.applause(Math.min(3, level + 1));
+  }
+
   groan() {
     this.noise({ dur: 0.9, vol: 0.05, freq: 350, freq2: 220, q: 2, at: 0.3, attack: 0.2 });
   }
