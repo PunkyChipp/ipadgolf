@@ -77,7 +77,7 @@ function polyDist(x, y, line) {
 // ellipses or creeks ({ line, w }). slope: green gradient in yards of rise per
 // yard; bumps add local humps (h in yards).
 
-export const HOLES = [
+const LINKS = [
   {
     name: 'The Opener', par: 4,
     path: [[0, 0], [3, -120], [-6, -250], [0, -372]],
@@ -195,6 +195,269 @@ export const HOLES = [
   },
 ];
 
+// Augusta National, from the Masters tees scaled to this game's clubs (about
+// 93% of the real yardage). Pines line every hole, the sand is white, the
+// greens are fast and tiered, and Rae's Creek runs through Amen Corner.
+const AUGUSTA = [
+  {
+    name: 'Tea Olive', par: 4,
+    path: [[0, 0], [0, -150], [12, -300], [18, -415]],
+    fairway: { from: 45, endGap: 24, width: 44 },
+    green: { x: 18, y: -418, rx: 12, ry: 15, rot: 0.1 },
+    bunkers: [
+      { x: 42, y: -292, rx: 11, ry: 6, rot: 0.3 },
+      { x: 4, y: -406, rx: 6, ry: 4, rot: 0.5 },
+    ],
+    flowers: [{ x: -40, y: -380, rx: 9, ry: 5 }],
+    bounds: 70, trees: 0.75,
+    slope: { tilt: [0.004, -0.012], bumps: [{ dx: -3, dy: -6, r: 5, h: 0.08 }], tiers: [{ dx: 0, dy: 9, ang: Math.PI / 2, h: -0.35, w: 1.4 }] },
+  },
+  {
+    name: 'Pink Dogwood', par: 5,
+    path: [[0, 0], [5, -250], [-38, -400], [-82, -535]],
+    fairway: { from: 45, endGap: 30, width: 46 },
+    green: { x: -84, y: -539, rx: 11, ry: 17, rot: 0.3 },
+    bunkers: [
+      { x: 38, y: -268, rx: 12, ry: 7, rot: 0.2 },
+      { x: -100, y: -530, rx: 5, ry: 7, rot: 0.3 },
+      { x: -68, y: -532, rx: 5, ry: 6, rot: 0.2 },
+    ],
+    treeClusters: [{ x: -48, y: -262, n: 20, spread: 26 }],
+    flowers: [{ x: -110, y: -560, rx: 10, ry: 5 }, { x: 30, y: -150, rx: 8, ry: 4 }],
+    bounds: 72, trees: 0.75,
+    slope: { tilt: [0.006, 0.012], bumps: [{ dx: 3, dy: 4, r: 5, h: -0.08 }] },
+  },
+  {
+    name: 'Flowering Peach', par: 4,
+    path: [[0, 0], [-3, -160], [2, -330]],
+    fairway: { from: 40, endGap: 22, width: 40 },
+    green: { x: 3, y: -333, rx: 9, ry: 14, rot: -0.5 },
+    bunkers: [
+      { x: -24, y: -236, rx: 4, ry: 3, rot: 0 },
+      { x: -15, y: -248, rx: 4, ry: 3, rot: 0.4 },
+      { x: -27, y: -256, rx: 4, ry: 3, rot: 0.2 },
+      { x: -14, y: -266, rx: 4, ry: 3, rot: 0.6 },
+      { x: -9, y: -326, rx: 5, ry: 4, rot: 0.4 },
+    ],
+    flowers: [{ x: 30, y: -350, rx: 8, ry: 5 }],
+    bounds: 66, trees: 0.7,
+    slope: { tilt: [0.004, 0.009], bumps: [{ dx: -2, dy: -6, r: 4, h: -0.08 }], tiers: [{ dx: 0, dy: 8, ang: Math.PI / 2, h: -0.4, w: 1.2 }] },
+  },
+  {
+    name: 'Flowering Crab Apple', par: 3,
+    path: [[0, 0], [0, -220]],
+    fairway: { from: 170, endGap: 14, width: 26 },
+    green: { x: 0, y: -222, rx: 15, ry: 12, rot: 0 },
+    bunkers: [
+      { x: 15, y: -208, rx: 8, ry: 5, rot: 0.4 },
+      { x: -13, y: -237, rx: 7, ry: 3.5, rot: -0.2 },
+    ],
+    bounds: 60, trees: 0.7,
+    slope: { tilt: [0.0, -0.012], bumps: [], tiers: [{ dx: 0, dy: 1, ang: Math.PI / 2, h: -0.3, w: 1.6 }] },
+  },
+  {
+    name: 'Magnolia', par: 4,
+    path: [[0, 0], [5, -230], [-15, -350], [-30, -460]],
+    fairway: { from: 45, endGap: 26, width: 42 },
+    green: { x: -31, y: -463, rx: 13, ry: 14, rot: 0 },
+    bunkers: [
+      { x: -30, y: -276, rx: 8, ry: 5, rot: 0.3 },
+      { x: -25, y: -297, rx: 7, ry: 5, rot: 0.2 },
+      { x: -30, y: -481, rx: 9, ry: 3.5, rot: 0 },
+    ],
+    treeClusters: [{ x: -45, y: -230, n: 12, spread: 20 }],
+    bounds: 68, trees: 0.75,
+    slope: { tilt: [0.003, 0.008], bumps: [{ dx: 5, dy: 2, r: 5, h: 0.14 }, { dx: -5, dy: -4, r: 4, h: -0.06 }] },
+  },
+  {
+    name: 'Juniper', par: 3,
+    path: [[0, 0], [0, -175]],
+    fairway: { from: 120, endGap: 16, width: 30 },
+    green: { x: 0, y: -178, rx: 16, ry: 13, rot: 0.2 },
+    bunkers: [{ x: -16, y: -167, rx: 6, ry: 5, rot: 0.3 }],
+    flowers: [{ x: -36, y: -120, rx: 10, ry: 5 }, { x: 34, y: -190, rx: 8, ry: 5 }],
+    bounds: 60, trees: 0.65,
+    slope: { tilt: [-0.004, -0.008], bumps: [], tiers: [{ dx: 4, dy: -3, ang: -Math.PI / 4, h: 0.45, w: 1.3 }] },
+  },
+  {
+    name: 'Pampas', par: 4,
+    path: [[0, 0], [0, -210], [-4, -420]],
+    fairway: { from: 45, endGap: 22, width: 30 },
+    green: { x: -4, y: -424, rx: 10, ry: 15, rot: 0.1 },
+    bunkers: [
+      { x: -16, y: -413, rx: 4, ry: 6, rot: 0.1 },
+      { x: -3, y: -405, rx: 6, ry: 2.5, rot: 0 },
+      { x: 9, y: -414, rx: 3.5, ry: 5, rot: 0.1 },
+      { x: -13, y: -441, rx: 5, ry: 3, rot: 0.3 },
+      { x: 7, y: -441, rx: 5, ry: 3, rot: -0.3 },
+    ],
+    bounds: 46, trees: 1, roughW: 7,
+    slope: { tilt: [0.002, -0.014], bumps: [{ dx: 2, dy: -6, r: 4, h: 0.08 }] },
+  },
+  {
+    name: 'Yellow Jasmine', par: 5,
+    path: [[0, 0], [5, -260], [-10, -420], [-20, -530]],
+    fairway: { from: 45, endGap: 18, width: 44 },
+    green: { x: -20, y: -533, rx: 12, ry: 13, rot: 0 },
+    bunkers: [{ x: 36, y: -265, rx: 12, ry: 7, rot: -0.2 }],
+    treeClusters: [{ x: -42, y: -380, n: 14, spread: 18 }],
+    bounds: 70, trees: 0.7,
+    slope: { tilt: [-0.006, 0.006], bumps: [{ dx: -12, dy: 0, r: 4, h: 0.3 }, { dx: 12, dy: 2, r: 4, h: 0.3 }, { dx: 0, dy: -12, r: 4, h: 0.25 }] },
+  },
+  {
+    name: 'Carolina Cherry', par: 4,
+    path: [[0, 0], [4, -230], [-25, -340], [-45, -430]],
+    fairway: { from: 45, endGap: 24, width: 42 },
+    green: { x: -46, y: -434, rx: 12, ry: 13, rot: 0.2 },
+    bunkers: [
+      { x: -59, y: -425, rx: 5, ry: 4, rot: 0.2 },
+      { x: -50, y: -417, rx: 5, ry: 3, rot: 0.6 },
+    ],
+    treeClusters: [{ x: -40, y: -235, n: 12, spread: 18 }],
+    flowers: [{ x: -20, y: -460, rx: 9, ry: 5 }],
+    bounds: 68, trees: 0.75,
+    slope: { tilt: [0.005, -0.01], bumps: [], tiers: [{ dx: 0, dy: 7, ang: Math.PI / 2 - 0.4, h: -0.35, w: 1.3 }] },
+  },
+  {
+    name: 'Camellia', par: 4,
+    path: [[0, 0], [-10, -200], [-60, -330], [-110, -440]],
+    fairway: { from: 45, endGap: 26, width: 46 },
+    green: { x: -112, y: -444, rx: 12, ry: 14, rot: 0.4 },
+    bunkers: [
+      { x: -66, y: -372, rx: 12, ry: 7, rot: 0.6 },
+      { x: -97, y: -451, rx: 5, ry: 7, rot: 0.4 },
+    ],
+    treeClusters: [{ x: -60, y: -200, n: 20, spread: 24 }],
+    flowers: [{ x: -140, y: -450, rx: 10, ry: 6 }],
+    bounds: 72, trees: 0.8,
+    slope: { tilt: [0.01, 0.004], bumps: [{ dx: -4, dy: -4, r: 5, h: 0.1 }] },
+  },
+  {
+    name: 'White Dogwood', par: 4,
+    path: [[0, 0], [0, -250], [15, -380], [20, -480]],
+    fairway: { from: 45, endGap: 26, width: 42 },
+    green: { x: 22, y: -484, rx: 13, ry: 14, rot: -0.3 },
+    water: [{ x: 0, y: -474, rx: 10, ry: 18, rot: 0.1 }],
+    bunkers: [{ x: 37, y: -496, rx: 5, ry: 4, rot: 0.4 }],
+    treeClusters: [{ x: -25, y: -300, n: 10, spread: 16 }],
+    bounds: 70, trees: 0.75,
+    slope: { tilt: [0.012, 0.004], bumps: [] },
+  },
+  {
+    name: 'Golden Bell', par: 3,
+    path: [[0, 0], [0, -150]],
+    fairway: { from: 136, endGap: 10, width: 34 },
+    green: { x: 0, y: -153, rx: 17, ry: 7, rot: 0.22 },
+    water: [{ line: [[-70, -122], [-30, -131], [0, -136], [30, -138], [70, -144]], w: 7 }],
+    bunkers: [
+      { x: 1, y: -144.5, rx: 6, ry: 2.4, rot: 0.2 },
+      { x: -12, y: -164, rx: 6, ry: 2.6, rot: 0.25 },
+      { x: 11, y: -165, rx: 6, ry: 2.6, rot: 0.25 },
+    ],
+    bridges: [{ x: -38, y: -129, ang: Math.PI / 2 - 0.2, len: 11 }],
+    flowers: [{ x: -26, y: -176, rx: 14, ry: 5 }, { x: 26, y: -181, rx: 12, ry: 5 }, { x: 0, y: -186, rx: 10, ry: 4 }],
+    bounds: 56, trees: 0.6,
+    slope: { tilt: [0.003, -0.01], bumps: [] },
+  },
+  {
+    name: 'Azalea', par: 5,
+    path: [[0, 0], [0, -220], [-40, -320], [-110, -400], [-165, -465]],
+    fairway: { from: 45, endGap: 36, width: 44 },
+    green: { x: -167, y: -470, rx: 16, ry: 9, rot: -0.45 },
+    water: [{ line: [[-46, -40], [-48, -170], [-70, -260], [-112, -330], [-140, -390], [-148, -430], [-140, -452], [-150, -458], [-178, -455], [-215, -460]], w: 6 }],
+    bunkers: [
+      { x: -183, y: -485, rx: 4, ry: 3, rot: 0.3 },
+      { x: -172, y: -489, rx: 4, ry: 3, rot: 0 },
+      { x: -160, y: -486, rx: 4, ry: 3, rot: -0.3 },
+      { x: -150, y: -479, rx: 4, ry: 3, rot: -0.6 },
+    ],
+    bridges: [{ x: -144, y: -446, ang: 0.4, len: 9 }],
+    flowers: [{ x: -70, y: -150, rx: 14, ry: 26 }, { x: -110, y: -270, rx: 18, ry: 12, rot: 0.6 }, { x: -200, y: -490, rx: 12, ry: 6 }],
+    bounds: 72, trees: 0.7,
+    slope: { tilt: [0.008, -0.004], bumps: [{ dx: 6, dy: 0, r: 5, h: 0.08 }], tiers: [{ dx: -2, dy: 0, ang: -0.45, h: 0.3, w: 1.4 }] },
+  },
+  {
+    name: 'Chinese Fir', par: 4,
+    path: [[0, 0], [3, -220], [-12, -410]],
+    fairway: { from: 45, endGap: 22, width: 44 },
+    green: { x: -13, y: -414, rx: 13, ry: 14, rot: 0 },
+    bounds: 70, trees: 0.75,
+    slope: { tilt: [-0.006, -0.008], bumps: [{ dx: 4, dy: -3, r: 4, h: 0.16 }, { dx: -5, dy: 3, r: 4, h: -0.12 }, { dx: -2, dy: -8, r: 3, h: 0.1 }], tiers: [{ dx: 0, dy: 10, ang: Math.PI / 2, h: -0.4, w: 1.2 }] },
+  },
+  {
+    name: 'Firethorn', par: 5,
+    path: [[0, 0], [5, -260], [-5, -420], [-8, -505]],
+    fairway: { from: 45, endGap: 46, width: 44 },
+    green: { x: -8, y: -508, rx: 10, ry: 15, rot: 0 },
+    water: [{ x: -8, y: -480, rx: 24, ry: 8, rot: 0.03 }, { x: -12, y: -540, rx: 34, ry: 9, rot: 0.05 }],
+    bunkers: [{ x: 7, y: -511, rx: 4, ry: 6, rot: 0 }],
+    treeClusters: [{ x: 40, y: -330, n: 12, spread: 18 }],
+    bounds: 70, trees: 0.7,
+    slope: { tilt: [0.002, -0.012], bumps: [{ dx: 0, dy: -8, r: 4, h: 0.1 }] },
+  },
+  {
+    name: 'Redbud', par: 3,
+    path: [[0, 0], [-4, -165]],
+    fairway: null,
+    green: { x: -4, y: -168, rx: 15, ry: 11, rot: -0.35 },
+    water: [{ x: -26, y: -95, rx: 22, ry: 82, rot: -0.04 }],
+    bunkers: [
+      { x: 12, y: -162, rx: 4, ry: 6, rot: -0.2 },
+      { x: 6, y: -180, rx: 6, ry: 3, rot: -0.3 },
+      { x: -20, y: -163, rx: 4, ry: 3, rot: 0.3 },
+    ],
+    flowers: [{ x: 30, y: -120, rx: 8, ry: 5 }],
+    bounds: 62, trees: 0.6,
+    slope: { tilt: [0.022, 0.003], bumps: [{ dx: 6, dy: -5, r: 4, h: 0.08 }], tiers: [{ dx: 0, dy: 0, ang: -0.35 + Math.PI / 2, h: -0.25, w: 1.5 }] },
+  },
+  {
+    name: 'Nandina', par: 4,
+    path: [[0, 0], [0, -210], [5, -410]],
+    fairway: { from: 45, endGap: 22, width: 42 },
+    green: { x: 5, y: -413, rx: 13, ry: 12, rot: 0 },
+    bunkers: [
+      { x: -6, y: -398, rx: 6, ry: 3.5, rot: -0.2 },
+      { x: 15, y: -399, rx: 5, ry: 3.5, rot: 0.2 },
+    ],
+    bounds: 66, trees: 0.75,
+    slope: { tilt: [-0.004, 0.01], bumps: [{ dx: -3, dy: 0, r: 5, h: 0.1 }] },
+  },
+  {
+    name: 'Holly', par: 4,
+    path: [[0, 0], [0, -230], [20, -330], [40, -430]],
+    fairway: { from: 50, endGap: 24, width: 34 },
+    green: { x: 41, y: -434, rx: 12, ry: 15, rot: -0.2 },
+    bunkers: [
+      { x: -18, y: -278, rx: 9, ry: 6, rot: 0.2 },
+      { x: -10, y: -300, rx: 8, ry: 5, rot: 0.3 },
+      { x: 28, y: -426, rx: 5, ry: 8, rot: 0.3 },
+      { x: 55, y: -441, rx: 4, ry: 5, rot: -0.2 },
+    ],
+    flowers: [{ x: 80, y: -470, rx: 10, ry: 5 }],
+    bounds: 50, trees: 1, roughW: 8,
+    slope: { tilt: [0.002, -0.012], bumps: [], tiers: [{ dx: 0, dy: 1, ang: Math.PI / 2 + 0.2, h: -0.35, w: 1.3 }] },
+  },
+].map((h) => ({ ...h, course: 'augusta', treeStyle: 'pine', greenDecel: 0.5 }));
+
+export const HOLES = [...LINKS, ...AUGUSTA];
+
+const range = (a, n) => [...Array(n).keys()].map((i) => a + i);
+export const COURSES = [
+  {
+    id: 'links', name: 'Pocket Links', holes: range(0, LINKS.length),
+    blurb: 'Nine friendly holes with ponds, creeks and an island green.',
+  },
+  {
+    id: 'augusta', name: 'Augusta National', holes: range(LINKS.length, AUGUSTA.length),
+    blurb: 'Towering pines, white sand, Amen Corner and lightning-fast, tiered greens.',
+    nines: true,
+  },
+];
+
+export function courseOf(holeIndex) {
+  return COURSES.find((c) => c.holes.includes(holeIndex)) || COURSES[0];
+}
+
 // ---------- building a playable hole ----------
 
 export function buildHole(index, gameSeed = 1) {
@@ -225,7 +488,10 @@ export function buildHole(index, gameSeed = 1) {
     index, spec, name: spec.name, par: spec.par, path, length, green, pin, tee,
     bunkers: spec.bunkers || [], water: spec.water || [], bounds: spec.bounds, roughW,
     halfWidth, fwFrom, fwTo, slope: spec.slope, trees: [],
+    course: spec.course || 'links', greenDecel: spec.greenDecel ?? null,
+    flowers: spec.flowers || [], bridges: spec.bridges || [],
   };
+  hole.lieName = (t) => (t === T.DEEP && spec.treeStyle === 'pine' ? 'Pine straw' : TERRAIN_NAMES[t]);
 
   hole.nearest = (x, y, from = 0, to = Infinity) => {
     let best = Infinity, bs = 0;
@@ -278,6 +544,16 @@ function slopeAt(h, x, y) {
     gx += (e * -2 * dx) / (b.r * b.r);
     gy += (e * -2 * dy) / (b.r * b.r);
   }
+  // Tiers: a smooth step of height h across a line through (dx, dy), rising
+  // in direction ang over a width of about w yards.
+  for (const t of h.slope.tiers || []) {
+    const c = Math.cos(t.ang), s = Math.sin(t.ang);
+    const u = ((x - g.x - t.dx) * c + (y - g.y - t.dy) * s) / t.w;
+    const th = Math.tanh(u);
+    const d = (t.h * 0.5 * (1 - th * th)) / t.w;
+    gx += d * c;
+    gy += d * s;
+  }
   return [gx, gy];
 }
 
@@ -288,12 +564,16 @@ function placeTrees(h, r, spec) {
   const minY = Math.min(...h.path.map((p) => p.y)) - h.bounds - 30;
   const maxY = Math.max(...h.path.map((p) => p.y)) + h.bounds + 30;
   const step = 8;
+  const pine = spec.treeStyle === 'pine';
   const add = (x, y, big = 1) => {
-    // base: height of the lowest branches; a punch shot can run under them
-    h.trees.push({ x, y, r: (3.2 + r() * 3.2) * big, h: 11 + r() * 9, base: 2.6 + r() * 1.8, shade: r() });
+    // base: height of the lowest branches; a punch shot can run under them.
+    // Augusta's tall pines have high branches, so you can often punch under.
+    if (pine) h.trees.push({ x, y, r: (3.6 + r() * 2.4) * big, h: 20 + r() * 12, base: 4.5 + r() * 3, shade: r(), pine: true });
+    else h.trees.push({ x, y, r: (3.2 + r() * 3.2) * big, h: 11 + r() * 9, base: 2.6 + r() * 1.8, shade: r() });
   };
   const clearOf = (x, y) => {
     if (Math.hypot(x - h.tee.x, y - h.tee.y) < 22 || inEllipse(x, y, h.green, FRINGE_W + 7)) return false;
+    for (const f of spec.flowers || []) if (inEllipse(x, y, f, 1)) return false;
     const [d, s] = h.nearest(x, y);
     return d > h.halfWidth(s) + 5; // keep the line of play open
   };
@@ -303,7 +583,7 @@ function placeTrees(h, r, spec) {
       const roll = r();
       const t = terrainAt(h, px, py);
       if (!clearOf(px, py)) continue;
-      if (t === T.DEEP && roll < density * 0.45) add(px, py);
+      if (t === T.DEEP && roll < density * (pine ? 0.3 : 0.45)) add(px, py);
       else if (t === T.OB && roll < 0.35) add(px, py, 1.15);
       else if (t === T.ROUGH && roll < density * 0.04) add(px, py);
     }

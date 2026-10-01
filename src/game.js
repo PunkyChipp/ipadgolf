@@ -1,6 +1,6 @@
-import { buildHole as buildHoleRaw, windFor, HOLES, T, TERRAIN_NAMES } from './course.js';
+import { buildHole as buildHoleRaw, windFor, HOLES, COURSES, courseOf, T, TERRAIN_NAMES } from './course.js';
 import {
-  simulateShot, CLUBS, PUTTER, PUTT_SCALES, SHAPES, MISHIT, meterWindow, lieEffect, suggestClub, suggestPuttScale, shotSeed, shotLabel, previewShot, flightParams, flightPoint,
+  simulateShot, CLUBS, PUTTER, PUTT_SCALES, SHAPES, FULL_SHAPES, SHORT_SHAPES, GEAR, GEAR_STATS, DEFAULT_GEAR, gearFor, MISHIT, meterWindow, lieEffect, suggestClub, suggestPuttScale, shotSeed, shotLabel, previewShot, flightParams, flightPoint,
 } from './sim.js';
 import { Renderer } from './render.js';
 import { Sound } from './audio.js';
@@ -24,7 +24,7 @@ const TAU = Math.PI * 2;
 const COLORS = ['#e8433a', '#2f7de1', '#f2b705', '#a45de0'];
 const MAX_ONLINE = 4;
 // Bump when online messages change, so mismatched copies of the game say so instead of stalling.
-const NET_VERSION = 3;
+const NET_VERSION = 4;
 const METER_MIN = -0.15;
 const METER_MAX = 1.1;
 const DIFFICULTY = { casual: 1.5, standard: 1, pro: 0.72 };
@@ -61,9 +61,9 @@ let G = null; // the game
 let hole = null; // built hole for the current hole index
 let wind = null;
 
-function newGame(mode, names, holes, { simul = false, seed = (Math.random() * 2 ** 31) >>> 0 } = {}) {
+function newGame(mode, names, holes, { simul = false, seed = (Math.random() * 2 ** 31) >>> 0, ck = null } = {}) {
   const g = {
-    v: 2, mode, simul, seed, holes, h: 0, n: 0, turn: 0, done: false, last: null,
+    v: 2, mode, simul, seed, holes, ck, h: 0, n: 0, turn: 0, done: false, last: null,
     players: names.map((name) => ({ name, h: 0, shots: 0, strokes: 0, ball: null, holed: false, picked: false, scores: [], stats: [], cur: null })),
   };
   g.players.forEach((p, i) => resetForHole(g, i));
@@ -171,6 +171,10 @@ const U = {
   aim: 0,
   aimFor: '',
   puttScale: 10,
+  target: 0, // yards: where a full shot should land, or how far a putt should roll
+  preview: null,
+  previewKey: '',
+  previewT: 0,
   swing: { phase: 'idle' },
   anims: [],
   queue: [],
@@ -238,6 +242,51 @@ function canAct(p) {
   return true;
 }
 
+// ---------- courses ----------
+
+const PARTS = { all: 'All 18', front: 'Front 9', back: 'Back 9' };
+
+function coursePick() {
+  const c = store.get('course', null) || {};
+  const course = COURSES.find((k) => k.id === c.id) || COURSES[0];
+  const part = course.nines && PARTS[c.part] ? c.part : 'all';
+  return { course, part };
+}
+
+function courseHoles(pick = coursePick()) {
+  const h = pick.course.holes;
+  if (pick.part === 'front') return h.slice(0, 9);
+  if (pick.part === 'back') return h.slice(9);
+  return h.slice();
+}
+
+const courseKey = (pick = coursePick()) => `${pick.course.id}.${pick.part}`;
+
+// The hole's number on its own course's card (Augusta's 12th is 12, even on the back nine).
+function holeNo(idx) {
+  return courseOf(idx).holes.indexOf(idx) + 1;
+}
+
+function courseLabel(pick = coursePick()) {
+  const holes = courseHoles(pick);
+  const par = holes.reduce((a, i) => a + HOLES[i].par, 0);
+  const part = pick.course.nines ? (pick.part === 'all' ? '18 holes' : PARTS[pick.part]) : `${holes.length} holes`;
+  return { name: pick.course.name, meta: `${part} · Par ${par}`, par };
+}
+
+function bestFor(key) {
+  const all = store.get('bests', null) || {};
+  // Scores from before there was more than one course count for Pocket Links.
+  if (all[key] == null && key === 'links.all') return store.get('bestRound', null);
+  return all[key] ?? null;
+}
+
+function setBest(key, score) {
+  const all = store.get('bests', null) || {};
+  all[key] = score;
+  store.set('bests', all);
+}
+
 function difficulty() {
   return DIFFICULTY[store.get('difficulty', 'standard')] || 1;
 }
@@ -255,9 +304,128 @@ function spinName(sp) {
   return 'Straight';
 }
 
-function clubCarry(ci, lie) {
+function myGear() {
+  return { ...DEFAULT_GEAR, ...(store.get('gear', null) || {}) };
+}
+
+function clubCarry(ci, lie, shape = U.shape) {
   const c = CLUBS[ci];
-  return c.putter ? U.puttScale : c.carry * lieEffect(lie, ci).dist * SHAPES[U.shape].carry;
+  return c.putter ? U.puttScale : c.carry * lieEffect(lie, ci).dist * SHAPES[shape].carry * gearFor(myGear(), ci, lie).carry;
+}
+
+// ---------- short game: targets and previews ----------
+
+function isShortGame(ball = currentBall()) {
+  return !CLUBS[U.club].putter && ball.lie !== T.TEE && toPin(hole, ball) <= 70;
+}
+
+function shapeList() {
+  if (CLUBS[U.club].putter) return [0];
+  return isShortGame() ? SHORT_SHAPES : FULL_SHAPES;
+}
+
+function targetPower() {
+  if (CLUBS[U.club].putter) return Math.min(1, U.target / U.puttScale);
+  return Math.min(1, U.target / clubCarry(U.club, currentBall().lie));
+}
+
+// Short shots get a magnified meter, so the gold target sits about 70% along
+// and the marker moves slowly enough to stop on it.
+function meterScale() {
+  if (CLUBS[U.club].putter) return 1;
+  const tp = targetPower();
+  return tp < 0.6 ? Math.max(0.1, tp / 0.7) : 1;
+}
+
+function shotInput(power, acc) {
+  const putter = CLUBS[U.club].putter;
+  return {
+    club: U.club, aim: U.aim, power, acc, puttScale: U.puttScale,
+    shape: putter ? 0 : U.shape, spin: putter ? { x: 0, y: 0 } : { ...U.spin }, gear: myGear(),
+  };
+}
+
+const CALM = { speed: 0, dir: 0 };
+
+// The carry (or putt pace) that leaves the ball closest to the pin, with no
+// wind and a pure strike. Used to set a sensible target for every new shot.
+function defaultTarget() {
+  const ball = currentBall();
+  const dist = toPin(hole, ball);
+  if (CLUBS[U.club].putter) return puttPlaysLike(ball);
+  const full = clubCarry(U.club, ball.lie);
+  if (dist > full + 45) return full;
+  let lo = 1.5, hi = full, best = full, bestD = Infinity;
+  for (let i = 0; i < 11; i++) {
+    const t = (lo + hi) / 2;
+    const res = simulateShot(hole, ball, shotInput(t / full, 0), CALM, 1);
+    const f = res.frames[res.frames.length - 1];
+    if (res.outcome === 'holed') return t;
+    const d = Math.hypot(f.x - hole.pin.x, f.y - hole.pin.y);
+    if (d < bestD && !res.penalty) {
+      bestD = d;
+      best = t;
+    }
+    const along = (f.x - ball.x) * Math.cos(U.aim) + (f.y - ball.y) * Math.sin(U.aim);
+    if (along > dist) hi = t;
+    else lo = t;
+  }
+  // Blocked by trees or hazards everywhere: just aim to land at the flag.
+  if (bestD > dist * 0.5) return Math.min(full, dist);
+  return best;
+}
+
+// The pace for a putt to finish a foot past, allowing for the slope: uphill
+// putts play longer, downhill ones shorter.
+function puttPlaysLike(ball) {
+  const dist = toPin(hole, ball);
+  const rise = readPutt(ball).inches / 36;
+  const decel = hole.greenDecel || 0.62;
+  return Math.max(0.3, dist + 0.35 + (10.72 * rise) / decel);
+}
+
+// How much of a putt's path the preview shows, by difficulty.
+function puttPreviewShare() {
+  const d = store.get('difficulty', 'standard');
+  return d === 'casual' ? 0.75 : d === 'pro' ? 0.25 : 0.45;
+}
+
+function updatePreview() {
+  if (!G || !hole || U.screen !== 'play' || U.phase !== 'aim' || U.swing.phase !== 'idle') return;
+  const ball = currentBall();
+  const inp = shotInput(targetPower(), 0);
+  const key = [ball.x, ball.y, inp.club, Math.round(inp.aim * 3000), Math.round(U.target * 20), inp.shape, inp.spin.x, inp.spin.y, inp.puttScale].join('|');
+  if (key === U.previewKey) return;
+  const now = performance.now();
+  if (U.dragging && now - U.previewT < 50) return;
+  U.previewKey = key;
+  U.previewT = now;
+  const res = simulateShot(hole, ball, inp, CALM, 1);
+  const land = res.events.find((e) => e.type === 'land' || e.type === 'tree');
+  U.preview = {
+    frames: res.frames,
+    landF: CLUBS[U.club].putter ? 0 : land ? land.f : res.frames.length - 1,
+    end: res.frames[res.frames.length - 1],
+    outcome: res.outcome,
+    tree: res.events.some((e) => e.type === 'tree'),
+  };
+}
+
+// Height difference to the hole (inches, + = uphill) and which way the putt
+// breaks, from the green's slope along the straight line.
+function readPutt(ball) {
+  const dx = hole.pin.x - ball.x, dy = hole.pin.y - ball.y;
+  const d = Math.hypot(dx, dy) || 1;
+  const ux = dx / d, uy = dy / d;
+  let rise = 0, side = 0;
+  const n = Math.max(4, Math.ceil(d / 0.25));
+  for (let i = 0; i < n; i++) {
+    const k = (i + 0.5) / n;
+    const [gx, gy] = hole.slopeAt(ball.x + dx * k, ball.y + dy * k);
+    rise += (gx * ux + gy * uy) * (d / n);
+    side += -gx * uy + gy * ux; // + means higher on the right, so it breaks left
+  }
+  return { inches: rise * 36, breaks: Math.abs(side / n) < 0.004 ? 'straight' : side > 0 ? 'left' : 'right' };
 }
 
 function save() {
@@ -307,6 +475,16 @@ function aimTarget(ball, dir, span, lateral) {
   return { x: ball.x + Math.cos(dir) * fwd, y: ball.y + Math.sin(dir) * fwd, rot, scale };
 }
 
+// How much course the aiming view should show: the whole shot, roll-out included.
+function aimSpan(ball, dist) {
+  const putter = CLUBS[U.club].putter;
+  const pv = U.preview;
+  let len = putter ? Math.max(dist, U.target) * 1.15 : U.target * 1.08;
+  if (pv && !putter) len = Math.max(len, Math.hypot(pv.end.x - ball.x, pv.end.y - ball.y) * 1.08);
+  if (!putter && !isShortGame(ball)) len = Math.max(len, clubCarry(U.club, ball.lie) * 0.7);
+  return Math.max(len, putter ? 5 : 16);
+}
+
 function cameraTarget() {
   if (U.mapView || U.phase === 'intro') return mapTarget();
   const p = me();
@@ -322,8 +500,7 @@ function cameraTarget() {
   const dist = toPin(hole, ball);
   if ((U.phase === 'aim' || U.phase === 'pass') && watch === p) {
     const dir = U.dragging ? U.dragging.camDir : U.aim;
-    const len = CLUBS[U.club].putter ? Math.max(U.puttScale, dist) : clubCarry(U.club, ball.lie) * 1.05;
-    const span = Math.max(len, CLUBS[U.club].putter ? 5 : 20);
+    const span = U.dragging ? U.dragging.span : aimSpan(ball, dist);
     return aimTarget(ball, dir, span, span * 0.62 + 14);
   }
   // Watching someone else: look from their ball toward the pin.
@@ -372,7 +549,7 @@ function beginHole() {
   U.aimFor = '';
   U.pendingCard = false;
   const b = $('#banner');
-  b.innerHTML = `<small>Hole ${G.h + 1} of ${G.holes.length}</small><strong></strong><span>Par ${hole.par} · ${hole.yards} yards · Wind ${wind.speed} mph</span>`;
+  b.innerHTML = `<small>${escapeHtml(courseOf(G.holes[G.h]).name)} · Hole ${holeNo(G.holes[G.h])}</small><strong></strong><span>Par ${hole.par} · ${hole.yards} yards · Wind ${wind.speed} mph</span>`;
   b.querySelector('strong').textContent = hole.name;
   b.classList.remove('show');
   void b.offsetWidth;
@@ -392,13 +569,16 @@ function refreshPhase() {
       U.aimFor = key;
       const ball = pl.ball;
       const dist = toPin(hole, ball);
-      U.club = suggestClub(dist, ball.lie);
+      U.club = suggestClub(dist, ball.lie, myGear());
       U.shape = 0;
       U.spin = { x: 0, y: 0 };
       U.zoom = 1;
       U.swing = { phase: 'idle' };
       U.puttScale = suggestPuttScale(dist);
       U.aim = defaultAim(ball, U.club);
+      U.target = defaultTarget();
+      if (CLUBS[U.club].putter) U.puttScale = suggestPuttScale(U.target);
+      U.previewKey = '';
       const needPass = G.mode === 'hotseat' && U.lastPlayer !== -1 && U.lastPlayer !== p;
       U.lastPlayer = p;
       if (needPass) {
@@ -433,8 +613,7 @@ function defaultAim(ball, ci) {
 function takeShot(power, acc) {
   const p = me();
   const pl = G.players[p];
-  const putter = CLUBS[U.club].putter;
-  const input = { club: U.club, aim: U.aim, power, acc, puttScale: U.puttScale, shape: putter ? 0 : U.shape, spin: putter ? { x: 0, y: 0 } : { ...U.spin } };
+  const input = shotInput(power, acc);
   const res = simulateShot(hole, pl.ball, input, wind, shotSeed(G.seed, pl.h, p, pl.shots));
   if (U.online) U.online.link.send({ t: 'shot', p, k: pl.shots, h: pl.h, input, name: pl.name });
   U.swing = { phase: 'idle' };
@@ -541,9 +720,20 @@ function finishShotFx(a) {
     sound.cup();
     const strokes = pl.strokes + 1 + res.penalty;
     const d = strokes - hole.par;
+    const start = res.frames[0];
+    const from = Math.hypot(start.x - hole.pin.x, start.y - hole.pin.y);
+    const putt = CLUBS[a.input.club].putter;
+    // Name the shot when it deserves it.
+    const flair = strokes === 1 ? '' : !putt ? (from < 60 ? 'Chip-in!' : 'Holed out!') : from >= 10 ? 'Monster putt!' : from >= 5 ? 'Great putt!' : '';
+    if (flair) popup(who + flair, '#9fe3ff', 1.8, 30);
     popup(who + scoreName(strokes, hole.par), d < 0 || strokes === 1 ? '#ffe27a' : '#ffffff', 2, strokes === 1 || d <= -1 ? 44 : 34);
-    if (mine || d < 0) sound.applause(strokes === 1 ? 3 : d <= -2 ? 3 : d === -1 ? 2 : d === 0 ? 1 : 0);
+    const big = strokes === 1 || d <= -2 ? 3 : d === -1 || flair ? 2 : d === 0 ? 1 : 0;
+    if (mine || d < 0 || flair) {
+      if (big >= 2) sound.roar(big - 1);
+      else sound.applause(big);
+    }
     R.ring(hole.pin.x, hole.pin.y, 0.1, 2.5, 'rgba(255,255,255,0.9)', 0.8);
+    if (d < 0 || strokes === 1) R.burst(hole.pin.x, hole.pin.y, strokes === 1 ? 90 : 46, { colors: ['#ffd23f', '#ff5fa2', '#7fd3ff', '#ffffff', '#8be08b'], speed: 7, up: 9, life: 1.6, size: 0.3 });
   } else if (res.outcome === 'water') {
     popup(who + 'In the water', '#a8e4ff', 1.8, 30);
     if (mine) popup('Penalty stroke – drop behind the hazard', '#ffffff', 1.8, 18, true);
@@ -559,6 +749,21 @@ function finishShotFx(a) {
   } else if (CLUBS[a.input.club].putter) {
     const ft = Math.round(toPin(hole, res.final) * 3);
     if (ft <= 3) popup('Tap-in range', '#ffffff', 1.1, 22);
+    else {
+      // Pace feedback: how far short or past the hole it finished.
+      const s0 = res.frames[0];
+      const ux = hole.pin.x - s0.x, uy = hole.pin.y - s0.y, ul = Math.hypot(ux, uy) || 1;
+      const past = ((res.final.x - hole.pin.x) * ux + (res.final.y - hole.pin.y) * uy) / ul;
+      const pft = Math.round(Math.abs(past) * 3);
+      popup(pft < 1 ? `${ft} ft left` : `${pft} ft ${past > 0 ? 'past' : 'short'} · ${ft} ft left`, '#ffffff', 1.6, 20, true);
+    }
+  } else if (res.final.lie === T.GREEN && toPin(hole, res.final) <= 3.4) {
+    // An approach or chip that finishes close gets the gallery going.
+    const ft = Math.max(1, Math.round(toPin(hole, res.final) * 3));
+    popup(ft <= 4 ? 'Stiff!' : 'Close!', '#ffe27a', 1.5, 30);
+    popup(`${ft} ft to go`, '#ffffff', 1.6, 20, true);
+    if (hole.course === 'augusta') sound.roar(ft <= 4 ? 1 : 0.5);
+    else sound.applause(ft <= 4 ? 2 : 1);
   } else {
     // Where it finished: total distance and what's left.
     const start = res.frames[0];
@@ -577,7 +782,7 @@ function showCard() {
     const s = last.results[i];
     return `<div class="card-row"><span class="dot" style="background:${COLORS[i]}"></span><span class="nm"></span><b>${last.picked[i] ? 'Picked up' : scoreName(s, par)}</b><span class="num">${s}</span><span class="rel">${fmtRel(relPar(p, G))}</span></div>`;
   });
-  $('#cardHole').textContent = `Hole ${last.h + 1} · ${HOLES[last.hole].name} · Par ${par}`;
+  $('#cardHole').textContent = `Hole ${holeNo(last.hole)} · ${HOLES[last.hole].name} · Par ${par}`;
   $('#cardRows').innerHTML = lines.join('');
   [...$('#cardRows').querySelectorAll('.nm')].forEach((el, i) => (el.textContent = G.players[i].name));
   const best = Math.min(...last.results);
@@ -591,7 +796,7 @@ function showCard() {
 function nextFromCard() {
   sound.click();
   if (G.mode === 'practice') {
-    G = newGame('practice', [G.players[0].name], G.holes);
+    G = newGame('practice', [G.players[0].name], G.holes, { ck: G.ck });
     startPlay();
     return;
   }
@@ -622,9 +827,10 @@ function showFinal() {
   const totals = G.players.map((p) => p.scores.reduce((a, b) => a + b, 0));
   let title;
   if (G.players.length === 1) {
-    const best = store.get('bestRound', null);
+    const key = G.ck || 'links.all';
+    const best = bestFor(key);
     const isBest = G.mode === 'solo' && (best == null || totals[0] < best);
-    if (isBest) store.set('bestRound', totals[0]);
+    if (isBest) setBest(key, totals[0]);
     title = isBest ? 'New personal best!' : `Round complete${best != null ? ` · best ${best}` : ''}`;
   } else {
     const m = Math.min(...totals);
@@ -640,22 +846,33 @@ function showFinal() {
 }
 
 function scorecardHTML(g) {
-  const holes = g.holes;
   const cell = (s, par) => {
     if (s == null) return '<td class="empty">–</td>';
     const d = s - par;
     const cls = s === 1 ? 'ace' : d <= -2 ? 'eagle' : d === -1 ? 'birdie' : d === 0 ? 'par' : d === 1 ? 'bogey' : 'dbl';
     return `<td><span class="sc ${cls}">${s}</span></td>`;
   };
-  const parTot = holes.reduce((a, h) => a + HOLES[h].par, 0);
-  const rows = g.players
-    .map((p, i) => {
-      const tot = p.scores.reduce((a, b) => a + b, 0);
-      return `<tr><th><span class="dot" style="background:${COLORS[i]}"></span>${escapeHtml(p.name)}</th>${holes.map((h, k) => cell(p.scores[k], HOLES[h].par)).join('')}<td class="tot">${p.scores.length ? tot : '–'}</td><td class="tot">${p.scores.length ? fmtRel(relPar(p, g)) : ''}</td></tr>`;
+  // Eighteen holes go on two cards, front and back, like a real scorecard.
+  const parts = g.holes.length > 9 ? [[0, 9, 'Out'], [9, g.holes.length, 'In']] : [[0, g.holes.length, null]];
+  return parts
+    .map(([from, to, label], pi) => {
+      const holes = g.holes.slice(from, to);
+      const last = pi === parts.length - 1;
+      const parSum = holes.reduce((a, h) => a + HOLES[h].par, 0);
+      const parTot = g.holes.reduce((a, h) => a + HOLES[h].par, 0);
+      const head = `<th>Hole</th>${holes.map((h) => `<th>${holeNo(h)}</th>`).join('')}${label ? `<th>${label}</th>` : ''}${last ? '<th>Tot</th><th>±</th>' : ''}`;
+      const parRow = `<th>Par</th>${holes.map((h) => `<td>${HOLES[h].par}</td>`).join('')}${label ? `<td>${parSum}</td>` : ''}${last ? `<td>${parTot}</td><td></td>` : ''}`;
+      const rows = g.players
+        .map((p, i) => {
+          const mine = p.scores.slice(from, to);
+          const sub = mine.reduce((a, b) => a + (b || 0), 0);
+          const tot = p.scores.reduce((a, b) => a + b, 0);
+          return `<tr><th><span class="dot" style="background:${COLORS[i]}"></span>${escapeHtml(p.name)}</th>${holes.map((h, k) => cell(p.scores[from + k], HOLES[h].par)).join('')}${label ? `<td class="tot">${mine.length ? sub : '–'}</td>` : ''}${last ? `<td class="tot">${p.scores.length ? tot : '–'}</td><td class="tot">${p.scores.length ? fmtRel(relPar(p, g)) : ''}</td>` : ''}</tr>`;
+        })
+        .join('');
+      return `<div class="sc-wrap"><table class="scorecard"><thead><tr>${head}</tr></thead><tbody><tr class="par-row">${parRow}</tr>${rows}</tbody></table></div>`;
     })
     .join('');
-  return `<div class="sc-wrap"><table class="scorecard"><thead><tr><th>Hole</th>${holes.map((h) => `<th>${h + 1}</th>`).join('')}<th>Tot</th><th>±</th></tr></thead>
-    <tbody><tr class="par-row"><th>Par</th>${holes.map((h) => `<td>${HOLES[h].par}</td>`).join('')}<td>${parTot}</td><td></td></tr>${rows}</tbody></table></div>`;
 }
 
 function escapeHtml(s) {
@@ -668,12 +885,12 @@ function meterPos(now) {
   const s = U.swing;
   const up = CLUBS[U.club].up * 1000;
   if (s.phase === 'up') return (now - s.t0) / up;
-  if (s.phase === 'down') return s.power - ((now - s.t1) / up) * 1.3;
+  if (s.phase === 'down') return s.m - ((now - s.t1) / up) * 1.3;
   return 0;
 }
 
 function swingWindow(power) {
-  return meterWindow(currentBall().lie, U.club, power, U.shape, spinMag()) * difficulty();
+  return meterWindow(currentBall().lie, U.club, power, U.shape, spinMag(), myGear()) * difficulty();
 }
 
 function swingTap(ts) {
@@ -682,12 +899,12 @@ function swingTap(ts) {
   const s = U.swing;
   const putter = CLUBS[U.club].putter;
   if (s.phase === 'idle') {
-    U.swing = { phase: 'up', t0: now };
+    U.swing = { phase: 'up', t0: now, scale: meterScale() };
     sound.tick();
   } else if (s.phase === 'up') {
     const m = Math.max(0.02, Math.min(putter ? 1 : METER_MAX, meterPos(now)));
     if (putter) return takeShot(m, 0);
-    U.swing = { phase: 'down', power: m, t1: now };
+    U.swing = { phase: 'down', m, power: m * s.scale, scale: s.scale, t1: now };
     sound.tick();
   } else if (s.phase === 'down') {
     finishSwing(s.power, meterPos(now));
@@ -711,7 +928,7 @@ function tickMeter() {
   const putter = CLUBS[U.club].putter;
   if (s.phase === 'up' && m >= (putter ? 1 : METER_MAX)) {
     if (putter) return takeShot(1, 0);
-    U.swing = { phase: 'down', power: METER_MAX, t1: now };
+    U.swing = { phase: 'down', m: METER_MAX, power: METER_MAX * s.scale, scale: s.scale, t1: now };
   } else if (s.phase === 'down' && m <= METER_MIN) {
     finishSwing(s.power, METER_MIN);
   }
@@ -754,7 +971,7 @@ function drawMeter() {
   if (!putter) {
     c.fillStyle = 'rgba(232,67,58,0.35)';
     c.fillRect(X(1), top, X(METER_MAX) - X(1), bh);
-    const pw = s.phase === 'down' ? s.power : 1;
+    const pw = s.phase === 'down' ? s.power : targetPower();
     const w = swingWindow(pw);
     // Outside the good window the ball hooks or slices; far outside, a mishit.
     c.fillStyle = 'rgba(255,180,90,0.22)';
@@ -764,7 +981,7 @@ function drawMeter() {
     c.fillStyle = 'rgba(255,240,140,0.85)';
     c.fillRect(X(-w * 0.22), top, X(w * 0.22) - X(-w * 0.22), bh);
   }
-  const fillTo = s.phase === 'up' ? m : s.phase === 'down' ? s.power : 0;
+  const fillTo = s.phase === 'up' ? m : s.phase === 'down' ? s.m : 0;
   if (fillTo > 0) {
     c.fillStyle = grad;
     c.globalAlpha = 0.85;
@@ -774,13 +991,33 @@ function drawMeter() {
   c.font = '700 11px Nunito, ui-rounded, system-ui, sans-serif';
   c.textAlign = 'center';
   c.textBaseline = 'bottom';
-  const full = clubCarry(U.club, ball.lie);
+  const scale = s.phase === 'idle' ? meterScale() : s.scale || 1;
+  const full = clubCarry(U.club, ball.lie) * scale;
+  const tk = targetPower() / scale;
+  const near = (k) => Math.abs(X(k) - X(tk)) < 26;
   for (const k of [0.25, 0.5, 0.75, 1]) {
     c.fillStyle = 'rgba(255,255,255,0.55)';
     c.fillRect(X(k) - 0.5, top, 1, bh);
-    c.fillStyle = 'rgba(255,255,255,0.85)';
+    if (near(k)) continue;
+    c.fillStyle = 'rgba(255,255,255,0.7)';
     const label = putter ? `${Math.round(full * k * 3)} ft` : `${Math.round(full * k)}`;
     c.fillText(label, X(k), top - 6);
+  }
+  // The gold target: stop the power here to land on your target.
+  if (tk > 0 && tk <= hi) {
+    const tx = X(tk);
+    c.fillStyle = 'rgba(0,0,0,0.35)';
+    c.fillRect(tx - 2, top, 5, bh);
+    c.fillStyle = '#ffd23f';
+    c.fillRect(tx - 1.5, top, 3, bh);
+    c.beginPath();
+    c.moveTo(tx, top + 7);
+    c.lineTo(tx - 6, top - 1);
+    c.lineTo(tx + 6, top - 1);
+    c.fill();
+    c.font = '800 12px Nunito, ui-rounded, system-ui, sans-serif';
+    const lbl = putter ? `${Math.round(U.target * 3)} ft` : `${Math.round(U.target)} yd`;
+    c.fillText(lbl, tx, top - 4);
   }
   if (!putter) {
     c.fillStyle = '#fff';
@@ -789,9 +1026,9 @@ function drawMeter() {
   if (s.phase === 'down') {
     c.fillStyle = '#fff';
     c.beginPath();
-    c.moveTo(X(s.power), top + bh + 2);
-    c.lineTo(X(s.power) - 7, top + bh + 13);
-    c.lineTo(X(s.power) + 7, top + bh + 13);
+    c.moveTo(X(s.m), top + bh + 2);
+    c.lineTo(X(s.m) - 7, top + bh + 13);
+    c.lineTo(X(s.m) + 7, top + bh + 13);
     c.fill();
   }
   if (s.phase !== 'idle') {
@@ -852,8 +1089,8 @@ function drawPopups(dt) {
 
 function updateHud() {
   if (!G || !hole) return;
-  $('#hNum').textContent = Math.min(G.h + 1, G.holes.length);
-  $('#hCount').textContent = G.holes.length;
+  $('#hNum').textContent = holeNo(G.holes[Math.min(G.h, G.holes.length - 1)]);
+  $('#hCount').textContent = courseOf(G.holes[0]).holes.length;
   $('#hName').textContent = hole.name;
   $('#hPar').textContent = hole.par;
   $('#hYards').textContent = hole.yards;
@@ -880,7 +1117,7 @@ function updatePanel() {
   $('#panelWait').hidden = mine;
   const dist = toPin(hole, ball);
   $('#toPin').textContent = pl.holed ? 'In' : ball.lie === T.GREEN || dist < 20 ? `${Math.max(1, Math.round(dist * 3))} ft` : `${Math.round(dist)} yd`;
-  $('#lie').textContent = pl.holed ? 'Holed' : TERRAIN_NAMES[ball.lie];
+  $('#lie').textContent = pl.holed ? 'Holed' : hole.lieName(ball.lie);
   $('#lie').dataset.lie = pl.holed ? 5 : ball.lie;
   if (!mine) {
     let who = '';
@@ -902,11 +1139,11 @@ function updatePanel() {
     $('#clubInfo').textContent = `Range ${U.puttScale * 3} ft`;
   } else {
     const le = lieEffect(ball.lie, U.club);
-    $('#clubInfo').textContent = `${Math.round(clubCarry(U.club, ball.lie))} yd carry${le.dist < 0.99 ? ` (${TERRAIN_NAMES[ball.lie].toLowerCase()})` : ''}`;
+    $('#clubInfo').textContent = `${Math.round(clubCarry(U.club, ball.lie))} yd carry${le.dist < 0.99 ? ` (${hole.lieName(ball.lie).toLowerCase()})` : ''}`;
   }
   $('#rangeBtn').hidden = !club.putter;
   $('#shapeBtn').hidden = !!club.putter;
-  $('#shapeBtn').textContent = `Shot: ${SHAPES[U.shape].name}`;
+  $('#shapeBtn').textContent = `Shot: ${U.shape === 0 && isShortGame() ? 'Pitch' : SHAPES[U.shape].name}`;
   $('#shapeBtn').classList.toggle('on', U.shape !== 0);
   $('.spin-col').hidden = !!club.putter;
   const R0 = 25;
@@ -914,14 +1151,24 @@ function updatePanel() {
   $('#spinLabel').textContent = spinName(U.spin);
   $('#spinLabel').classList.toggle('on', spinMag() > 0);
   const s = U.swing.phase;
+  let read = '';
+  if (club.putter && (ball.lie === T.GREEN || ball.lie === T.FRINGE)) {
+    const pr = readPutt(ball);
+    const inch = Math.round(Math.abs(pr.inches));
+    const plays = Math.round(puttPlaysLike(ball) * 3);
+    read = ` · ${inch < 1 ? 'Level' : `${inch} in ${pr.inches > 0 ? 'uphill' : 'downhill'}, plays ${plays} ft`}${pr.breaks === 'straight' ? ', straight' : `, breaks ${pr.breaks}`}`;
+  }
   $('#swingHint').textContent = club.putter
-    ? s === 'idle' ? 'Tap to start the putt' : 'Tap to set the pace'
-    : s === 'idle' ? 'Tap to start your swing' : s === 'up' ? 'Tap to set power' : 'Tap on the white line!';
+    ? s === 'idle' ? `Tap to start the putt${read}` : 'Tap on the gold line for perfect pace'
+    : s === 'idle' ? 'Tap to start your swing' : s === 'up' ? 'Tap on the gold line to land on your target' : 'Tap on the white line!';
 }
 
 function setScreen(name) {
   U.screen = name;
-  for (const id of ['title', 'lobby', 'setup', 'practice', 'card', 'final', 'pause', 'help']) $('#' + id).hidden = id !== name;
+  for (const id of ['title', 'courses', 'bag', 'lobby', 'setup', 'practice', 'card', 'final', 'pause', 'help']) {
+    const el = $('#' + id);
+    if (el) el.hidden = id !== name;
+  }
   const inGame = name === 'play' || name === 'card' || name === 'pause' || name === 'final';
   $('#hud').hidden = !inGame || name === 'final';
   $('#panel').hidden = name !== 'play';
@@ -969,6 +1216,7 @@ function update(dt) {
     }
   }
   tickMeter();
+  updatePreview();
   updateCamera(dt);
   const wa = wind.dir + U.cam.rot;
   $('#windArrow').style.transform = `rotate(${(wa * 180) / Math.PI}deg)`;
@@ -999,27 +1247,35 @@ function render(dt) {
     scene.trails.push(a.trail);
   }
   const ball = currentBall();
-  if (U.screen === 'play' && U.phase === 'aim') {
+  if (U.screen === 'play' && U.phase === 'aim' && U.preview) {
     const club = CLUBS[U.club];
-    scene.aim = {
-      x: ball.x, y: ball.y, dir: U.aim,
-      len: clubCarry(U.club, ball.lie),
-      ticks: [0.25, 0.5, 0.75],
-      ring: club.putter ? 0.3 : 2.5,
+    const pv = U.preview;
+    const fr = pv.frames;
+    const pts = (from, to, step) => {
+      const out = [];
+      for (let i = from; i < to; i += step) out.push([fr[i].x, fr[i].y]);
+      out.push([fr[to].x, fr[to].y]);
+      return out;
     };
-    if (!club.putter && U.spin.x !== 0) {
-      // Show the intended curve from side spin (no wind, perfect strike).
-      const fp = flightParams(ball, { club: U.club, aim: U.aim, power: currentPower(), shape: U.shape, spin: U.spin, acc: 0 }, { speed: 0, dir: 0 });
-      scene.aim.path = [];
-      for (let i = 0; i <= 30; i++) {
-        const q = flightPoint(ball, fp, i / 30);
-        scene.aim.path.push([q.x, q.y, q.along / fp.carry]);
-      }
+    if (club.putter) {
+      // Only the start of the putt's path: enough to see it begin to break.
+      const last = Math.max(1, Math.round((fr.length - 1) * puttPreviewShare()));
+      scene.aim = { putt: true, flight: [[ball.x, ball.y]], roll: pts(0, Math.min(last, fr.length - 1), 3) };
+    } else {
+      const lf = Math.max(1, Math.min(pv.landF, fr.length - 1));
+      const showRoll = store.get('difficulty', 'standard') !== 'pro' || isShortGame();
+      scene.aim = {
+        flight: pts(0, lf, 2),
+        ring: 2.2,
+        label: `${Math.round(U.target)}`,
+        roll: showRoll && fr.length - 1 > lf ? pts(lf, fr.length - 1, 4) : null,
+        end: showRoll && pv.outcome !== 'water' ? pv.end : null,
+      };
     }
   }
   scene.showSlope = U.cam.scale > 7 && (ball.lie === T.GREEN || ball.lie === T.FRINGE || (U.phase === 'aim' && CLUBS[U.club].putter));
   const side = drawSide();
-  if (scene.aim && side && side.hit && !side.hit.edge) scene.aim.color = 'rgba(255,140,125,0.95)';
+  if (scene.aim && ((side && side.hit && !side.hit.edge) || (U.preview && (U.preview.tree || U.preview.outcome === 'water' || U.preview.outcome === 'ob')))) scene.aim.color = 'rgba(255,140,125,0.95)';
   R.draw(scene);
   drawPopups(dt);
   drawMeter();
@@ -1034,9 +1290,9 @@ let sideCache = { key: '', data: null };
 
 function currentPower() {
   const s = U.swing;
-  if (s.phase === 'up') return Math.max(0.02, Math.min(METER_MAX, meterPos(performance.now())));
+  if (s.phase === 'up') return Math.max(0.02, Math.min(METER_MAX, meterPos(performance.now()))) * (s.scale || 1);
   if (s.phase === 'down') return s.power;
-  return 1;
+  return targetPower();
 }
 
 // Trees whose canopy crosses the aim line within reach.
@@ -1061,8 +1317,8 @@ function drawSide() {
   }
   const ball = currentBall();
   const power = currentPower();
-  const base = { club: U.club, aim: U.aim, shape: U.shape };
-  const key = [U.club, U.shape, U.aim.toFixed(4), power.toFixed(3), ball.x.toFixed(2), ball.y.toFixed(2)].join('|');
+  const base = { club: U.club, aim: U.aim, shape: U.shape, spin: U.spin, gear: myGear() };
+  const key = [U.club, U.shape, U.aim.toFixed(4), power.toFixed(3), ball.x.toFixed(2), ball.y.toFixed(2), U.spin.x, U.spin.y].join('|');
   if (sideCache.key !== key) {
     const full = previewShot(hole, ball, { ...base, power: 1 });
     const main = Math.abs(power - 1) < 1e-3 ? full : previewShot(hole, ball, { ...base, power });
@@ -1213,9 +1469,11 @@ function drawSide() {
 
 // Menus show a slowly turning view of a hole behind them.
 function renderBackdrop(dt) {
-  if (!hole) {
-    hole = buildHole(6, 3);
-    wind = windFor(6, 3);
+  // Behind the menus: a signature hole from the chosen course.
+  const show = coursePick().course.id === 'augusta' ? COURSES[1].holes[11] : 6;
+  if (!hole || hole.index !== show) {
+    hole = buildHole(show, 3);
+    wind = windFor(show, 3);
     R.setHole(hole);
     const t = mapTarget();
     U.cam = { ...t, scale: t.scale * 1.6 };
@@ -1504,7 +1762,7 @@ function startOnlineGame() {
   if (!o || o.role !== 'host' || G || o.roster.length < 2) return;
   sound.click();
   const roster = o.roster.slice(0, MAX_ONLINE);
-  G = newGame('online', roster.map((r) => r.name), [...Array(HOLES.length).keys()], { simul: store.get('onlineSimul', true) });
+  G = newGame('online', roster.map((r) => r.name), courseHoles(), { simul: store.get('onlineSimul', true), ck: courseKey() });
   G.ids = roster.map((r) => r.id);
   U.local = [0];
   save();
@@ -1588,18 +1846,21 @@ function startSolo(fromSave) {
   U.local = [0];
   let saved = fromSave ? store.get('solo', null) : null;
   if (saved && saved.v !== 2) saved = null;
-  G = saved || newGame('solo', [store.get('name', 'You') || 'You'], [...Array(HOLES.length).keys()]);
+  G = saved || newGame('solo', [store.get('name', 'You') || 'You'], courseHoles(), { ck: courseKey() });
   startPlay();
 }
 
 function startHotseat() {
   sound.click();
   leaveOnline();
-  const a = $('#p1Input').value.trim().slice(0, 14) || 'Player 1';
-  const b = $('#p2Input').value.trim().slice(0, 14) || 'Player 2';
-  store.set('hotseat', [a, b]);
-  U.local = [0, 1];
-  G = newGame('hotseat', [a, b], [...Array(HOLES.length).keys()]);
+  // Players 1 and 2 always play; 3 and 4 join when they have a name.
+  const names = [1, 2, 3, 4]
+    .map((n) => [n, $(`#p${n}Input`).value.trim().slice(0, 14)])
+    .filter(([n, v]) => n <= 2 || v)
+    .map(([n, v]) => v || `Player ${n}`);
+  store.set('hotseat', names);
+  U.local = names.map((_, i) => i);
+  G = newGame('hotseat', names, courseHoles(), { ck: courseKey() });
   startPlay();
 }
 
@@ -1607,7 +1868,7 @@ function startPractice(i) {
   sound.click();
   leaveOnline();
   U.local = [0];
-  G = newGame('practice', [store.get('name', 'You') || 'You'], [i]);
+  G = newGame('practice', [store.get('name', 'You') || 'You'], [i], { ck: courseKey() });
   startPlay();
 }
 
@@ -1625,29 +1886,91 @@ function refreshTitle() {
   const solo = store.get('solo', null);
   const soloOk = solo && solo.v === 2;
   $('#btnContinue').hidden = !soloOk;
-  if (soloOk) $('#btnContinue').textContent = `Continue round · Hole ${solo.h + 1}`;
+  if (soloOk) $('#btnContinue').textContent = `Continue round · ${courseOf(solo.holes[0]).name}, hole ${holeNo(solo.holes[Math.min(solo.h, solo.holes.length - 1)])}`;
   const online = store.get('online', null);
   const onlineOk = online && online.game && online.game.v === 2;
   $('#btnRejoin').hidden = !onlineOk;
   if (onlineOk) $('#btnRejoin').textContent = `Rejoin online game ${online.code}`;
-  const best = store.get('bestRound', null);
-  const par = HOLES.reduce((a, h) => a + h.par, 0);
-  $('#bestLine').textContent = best == null ? `9 holes · Par ${par}` : `Best round ${best} (${fmtRel(best - par)})`;
+  const cl = courseLabel();
+  const best = bestFor(courseKey());
+  $('#courseName').textContent = cl.name;
+  $('#courseMeta').textContent = cl.meta + (best == null ? '' : ` · Best ${best} (${fmtRel(best - cl.par)})`);
   $('#btnSound').textContent = sound.muted ? 'Sound off' : 'Sound on';
   const d = store.get('difficulty', 'standard');
   $('#btnDiff').textContent = `Timing: ${d[0].toUpperCase() + d.slice(1)}`;
+}
+
+function showCourses() {
+  sound.click();
+  const list = $('#courseList');
+  const pick = coursePick();
+  list.innerHTML = '';
+  for (const course of COURSES) {
+    const card = document.createElement('div');
+    card.className = 'course-card' + (course === pick.course ? ' on' : '');
+    const yards = course.holes.reduce((a, i) => a + buildHole(i, 1).yards, 0);
+    const par = course.holes.reduce((a, i) => a + HOLES[i].par, 0);
+    const parts = course.nines ? ['all', 'front', 'back'] : ['all'];
+    const bests = parts.map((p) => [p, bestFor(`${course.id}.${p}`)]).filter(([, b]) => b != null);
+    card.innerHTML = `<div class="cc-head"><b></b><span>${course.holes.length} holes · Par ${par} · ${yards.toLocaleString()} yd</span></div><p></p>
+      ${bests.length ? `<small class="cc-best">Best: ${bests.map(([p, b]) => `${course.nines ? PARTS[p] + ' ' : ''}${b}`).join(' · ')}</small>` : ''}
+      ${course.nines ? `<div class="seg">${parts.map((p) => `<button class="seg-btn${course === pick.course && pick.part === p ? ' on' : ''}" data-part="${p}">${PARTS[p]}</button>`).join('')}</div>` : ''}`;
+    card.querySelector('b').textContent = course.name;
+    card.querySelector('p').textContent = course.blurb;
+    const choose = (part) => {
+      store.set('course', { id: course.id, part });
+      sound.click();
+      showCourses();
+    };
+    card.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-part]');
+      choose(btn ? btn.dataset.part : course === pick.course ? pick.part : 'all');
+    });
+    list.appendChild(card);
+  }
+  setScreen('courses');
+}
+
+function showBag() {
+  sound.click();
+  const gear = myGear();
+  const list = $('#bagList');
+  list.innerHTML = '';
+  for (const slot of GEAR) {
+    const row = document.createElement('div');
+    row.className = 'bag-row';
+    row.innerHTML = `<h3></h3><div class="bag-opts"></div>`;
+    row.querySelector('h3').textContent = slot.label;
+    for (const o of slot.options) {
+      const b = document.createElement('button');
+      b.className = 'bag-opt' + (gear[slot.slot] === o.id ? ' on' : '');
+      b.innerHTML = `<b></b><span class="bo-desc"></span><span class="bo-stats">${GEAR_STATS.map((n, k) => `<span class="bo-stat"><small>${n}</small><i style="--v:${o.stats[k] / 5}"></i></span>`).join('')}</span>`;
+      b.querySelector('b').textContent = o.name;
+      b.querySelector('.bo-desc').textContent = o.desc;
+      b.addEventListener('click', () => {
+        store.set('gear', { ...myGear(), [slot.slot]: o.id });
+        showBag();
+      });
+      row.querySelector('.bag-opts').appendChild(b);
+    }
+    list.appendChild(row);
+  }
+  setScreen('bag');
 }
 
 function showPracticeList() {
   sound.click();
   const grid = $('#holeGrid');
   grid.innerHTML = '';
-  HOLES.forEach((h, i) => {
+  const { course } = coursePick();
+  $('#practiceSub').textContent = `${course.name}: play any single hole as often as you like.`;
+  course.holes.forEach((i, k) => {
+    const h = HOLES[i];
     const b = document.createElement('button');
     b.className = 'hole-tile';
-    b.id = `hole-${i + 1}`;
+    b.id = `hole-${k + 1}`;
     const yards = buildHole(i, 1).yards;
-    b.innerHTML = `<span class="num">${i + 1}</span><span class="nm"></span><span class="meta">Par ${h.par} · ${yards} yd</span>`;
+    b.innerHTML = `<span class="num">${k + 1}</span><span class="nm"></span><span class="meta">Par ${h.par} · ${yards} yd</span>`;
     b.querySelector('.nm').textContent = h.name;
     b.addEventListener('click', () => startPractice(i));
     grid.appendChild(b);
@@ -1676,7 +1999,8 @@ canvas.addEventListener('pointerdown', (e) => {
     return;
   }
   if (U.screen !== 'play' || U.phase !== 'aim' || U.swing.phase !== 'idle' || U.mapView) return;
-  U.dragging = { id: e.pointerId, camDir: U.aim };
+  const b0 = currentBall();
+  U.dragging = { id: e.pointerId, camDir: U.aim, span: aimSpan(b0, toPin(hole, b0)) };
   aimAt(e.clientX, e.clientY);
 });
 canvas.addEventListener('pointermove', (e) => {
@@ -1705,8 +2029,12 @@ canvas.addEventListener('wheel', (e) => {
 function aimAt(sx, sy) {
   const [wx, wy] = R.toWorld(sx, sy);
   const b = currentBall();
-  if (Math.hypot(wx - b.x, wy - b.y) < 0.5) return;
+  const d = Math.hypot(wx - b.x, wy - b.y);
+  if (d < 0.5) return;
   U.aim = Math.atan2(wy - b.y, wx - b.x);
+  // Drag to where you want it to land: that sets the target (and the gold
+  // line on the meter). Putts keep their pace target at the hole.
+  if (!CLUBS[U.club].putter) U.target = Math.max(1.5, Math.min(clubCarry(U.club, b.lie), d));
 }
 
 // The swing responds on pointerdown for precise timing.
@@ -1751,6 +2079,9 @@ function changeClub(d) {
   }
   U.club = c;
   if (CLUBS[c].putter) U.puttScale = suggestPuttScale(toPin(hole, currentBall()));
+  if (!shapeList().includes(U.shape)) U.shape = 0;
+  U.target = defaultTarget();
+  if (CLUBS[c].putter) U.puttScale = suggestPuttScale(U.target);
   sound.click();
   updatePanel();
 }
@@ -1759,6 +2090,7 @@ $('#clubNext').addEventListener('click', () => changeClub(-1));
 $('#rangeBtn').addEventListener('click', () => {
   const i = PUTT_SCALES.indexOf(U.puttScale);
   U.puttScale = PUTT_SCALES[(i + 1) % PUTT_SCALES.length];
+  U.target = defaultTarget();
   sound.click();
   updatePanel();
 });
@@ -1806,7 +2138,9 @@ $('#rangeBtn').addEventListener('click', () => {
 
 $('#shapeBtn').addEventListener('click', () => {
   if (U.phase !== 'aim' || U.swing.phase !== 'idle') return;
-  U.shape = (U.shape + 1) % SHAPES.length;
+  const list = shapeList();
+  U.shape = list[(list.indexOf(U.shape) + 1) % list.length];
+  U.target = defaultTarget();
   sound.click();
   updatePanel();
 });
@@ -1865,13 +2199,24 @@ window.addEventListener('resize', () => {
 
 const on = (id, fn) => $(id).addEventListener('click', fn);
 on('#btnSolo', () => startSolo(false));
+on('#btnCourse', showCourses);
+on('#btnBag', showBag);
+on('#btnBagDone', () => {
+  sound.click();
+  setScreen('title');
+  refreshTitle();
+});
+on('#btnCoursesDone', () => {
+  sound.click();
+  setScreen('title');
+  refreshTitle();
+});
 on('#btnContinue', () => startSolo(true));
 on('#btnRejoin', rejoin);
 on('#btnTwo', () => {
   sound.click();
   const names = store.get('hotseat', ['Player 1', 'Player 2']);
-  $('#p1Input').value = names[0];
-  $('#p2Input').value = names[1];
+  for (let n = 1; n <= 4; n++) $(`#p${n}Input`).value = names[n - 1] || '';
   setScreen('setup');
 });
 function refreshModeButtons() {
@@ -1987,6 +2332,8 @@ if ('serviceWorker' in navigator && window.top === window.self && location.proto
 // Test hook: lets automated checks inspect state. Harmless in normal play.
 window.__pl = {
   get G() { return G; }, get U() { return U; }, get hole() { return hole; }, showFinal, showCard, refreshPhase,
+  club: () => CLUBS[U.club],
+  targetMeter: () => targetPower() / meterScale(),
   setBall: (x, y, lie) => { G.players[me()].ball = { x, y, lie }; U.aimFor = ''; refreshPhase(); },
 };
 

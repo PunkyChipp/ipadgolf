@@ -1,6 +1,6 @@
 // Network-first cache so the game still opens offline once it has been played,
 // while updates show up as soon as there is a connection.
-const CACHE = 'pocket-links-v2';
+const CACHE = 'pocket-links-v3';
 const ASSETS = [
   './',
   'index.html',

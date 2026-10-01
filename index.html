@@ -104,21 +104,27 @@
       </svg>
     </div>
     <h1>Pocket<br><span>Links</span></h1>
-    <p class="tag" id="bestLine">9 holes · Par 36</p>
+    <button id="btnCourse" class="course-pick" aria-label="Choose course">
+      <span class="cp-k">Course</span>
+      <b id="courseName">Pocket Links</b>
+      <span id="courseMeta" class="cp-meta">9 holes · Par 36</span>
+      <span class="cp-arrow" aria-hidden="true">›</span>
+    </button>
     <div class="menu">
       <button id="btnContinue" class="btn primary" hidden>Continue round</button>
       <button id="btnRejoin" class="btn primary" hidden>Rejoin online game</button>
       <button id="btnSolo" class="btn primary">Play a round</button>
       <div class="menu-row">
-        <button id="btnTwo" class="btn">2 players · 1 iPad</button>
-        <button id="btnOnline" class="btn">2 players · 2 iPads</button>
+        <button id="btnTwo" class="btn">Pass and play</button>
+        <button id="btnOnline" class="btn">Online · up to 4</button>
       </div>
       <div class="menu-row">
+        <button id="btnBag" class="btn">Your bag</button>
         <button id="btnPractice" class="btn">Practice a hole</button>
-        <button id="btnHelp" class="btn">How to play</button>
       </div>
     </div>
     <div class="link-row">
+      <button id="btnHelp" class="link-btn">How to play</button>
       <button id="btnDiff" class="link-btn">Timing: Standard</button>
       <button id="btnSound" class="link-btn">Sound on</button>
     </div>
@@ -161,10 +167,12 @@
 
 <section id="setup" class="screen" hidden>
   <div class="panel">
-    <h2>Two players</h2>
-    <p class="sub">Take turns on this iPad. The player furthest from the hole goes next.</p>
+    <h2>Pass and play</h2>
+    <p class="sub">Up to 4 players take turns on this iPad. The player furthest from the hole goes next.</p>
     <label class="field"><span>Player 1</span><input id="p1Input" maxlength="14" autocomplete="off"></label>
     <label class="field"><span>Player 2</span><input id="p2Input" maxlength="14" autocomplete="off"></label>
+    <label class="field"><span>Player 3</span><input id="p3Input" maxlength="14" autocomplete="off" placeholder="Optional"></label>
+    <label class="field"><span>Player 4</span><input id="p4Input" maxlength="14" autocomplete="off" placeholder="Optional"></label>
     <div class="menu">
       <button id="btnSetupStart" class="btn primary">Tee off</button>
       <button id="btnSetupBack" class="link-btn">Back</button>
@@ -172,10 +180,27 @@
   </div>
 </section>
 
+<section id="courses" class="screen" hidden>
+  <div class="panel wide">
+    <h2>Choose a course</h2>
+    <div id="courseList" class="course-list"></div>
+    <button id="btnCoursesDone" class="btn primary">Done</button>
+  </div>
+</section>
+
+<section id="bag" class="screen" hidden>
+  <div class="panel wide">
+    <h2>Your bag</h2>
+    <p class="sub">Pick your clubs and ball. Every choice is a trade-off.</p>
+    <div id="bagList" class="bag-list"></div>
+    <button id="btnBagDone" class="btn primary">Done</button>
+  </div>
+</section>
+
 <section id="practice" class="screen" hidden>
   <div class="panel wide">
     <h2>Practice</h2>
-    <p class="sub">Play any single hole as often as you like.</p>
+    <p class="sub" id="practiceSub">Play any single hole as often as you like.</p>
     <div id="holeGrid" class="hole-grid"></div>
     <button id="btnPracticeBack" class="btn">Back</button>
   </div>
@@ -222,40 +247,48 @@
     <h2>How to play</h2>
     <div class="help-grid">
       <div>
-        <h3>Aim</h3>
-        <p>Drag on the course to point the dotted line. The ring shows where a full swing carries with no wind. Use the arrows for fine aim.</p>
+        <h3>Aim: tap where it should land</h3>
+        <p>Drag on the course to where you want the ball to land. The ring is the landing spot, with its yardage. The dotted trail after it is how the ball should roll out, ending at the little circle (no wind, pure strike). Use the arrows for fine aim. A red guide means trees, water or out of bounds.</p>
       </div>
       <div>
         <h3>Swing: three taps</h3>
-        <p>Tap the meter to start. Tap again to set power: the numbers are yards. Past 100% you get extra distance but a tighter timing window. The marker then swings back: tap exactly on the white line. Just off the line gives a gentle fade (early) or draw (late). Further off, the shaded zones, and it becomes a slice or a hook that can curve 20 to 40 yards. Only a really bad miss is a duff or a shank.</p>
+        <p>Tap the meter to start. Tap again on the <b>gold line</b> to hit your target distance: short of it lands short, past it flies long. Past 100% gives extra distance but a tighter window. The marker swings back: tap on the white line. Just off it fades (early) or draws (late). In the shaded zones it slices or hooks 20 to 40 yards. Only a really bad miss duffs or shanks.</p>
       </div>
       <div>
-        <h3>Trees and shot shape</h3>
-        <p>When trees are near your line, the side view shows the ball's flight at the power you're swinging (and faintly at 100%, 75% and 50%). Red means it hits a tree. Tap <b>Shot</b> to switch between Normal, Punch (stays under the branches and runs out) and High (climbs over trouble, shorter and harder to time). Tap <b>Side</b> to keep the view open.</p>
-      </div>
-      <div>
-        <h3>Spin</h3>
-        <p>Tap or drag on the little ball where you want to strike it. This is how you shape shots on purpose: a full side strike bends a mid iron around 25 yards. Low is backspin: the ball stops quickly, and a wedge onto a green can zip back. High is topspin: lower flight, more roll. Left or right curves the ball (a draw or a fade), and the aim line bends to show it. Spin makes the timing window a little tighter. Double-tap the ball to clear it.</p>
-      </div>
-      <div>
-        <h3>Wind and lie</h3>
-        <p>The flag and the arrow at the top show the wind. It pushes the ball sideways and changes how far it carries. Rough, deep rough and bunkers cost distance and shrink the timing window. Only wedges play well from sand.</p>
+        <h3>Chipping and pitching</h3>
+        <p>Within 70 yards, <b>Shot</b> switches between Pitch, <b>Chip</b> (low, then rolls like a putt) and <b>Flop</b> (floats high and stops dead). The meter zooms in so the gold line is easy to hit. Club choice changes the roll: a lob wedge stops, a 9 iron runs. Watch the roll-out trail and pick the club that rolls it to the hole.</p>
       </div>
       <div>
         <h3>Putting</h3>
-        <p>On the green, the moving dashes flow downhill. Aim above the hole to let it break in. Two taps: start, then set the pace. The meter shows feet. Change the range for long putts.</p>
+        <p>The dashes flow downhill. The hint reads the putt for you: uphill or downhill, and which way it breaks. The yellow trail shows how the putt starts out, so aim until it curves toward the hole. Tap on the gold line for perfect pace (a foot past). After a miss it tells you how far short or past you were.</p>
+      </div>
+      <div>
+        <h3>Spin</h3>
+        <p>Tap or drag on the little ball where you want to strike it. Low is backspin (stops quickly; wedges can zip back), high is topspin (lower and more roll), and left or right draws or fades it. The aim guide bends to show it. Spin makes the timing window a little tighter. Double-tap the ball to clear it.</p>
+      </div>
+      <div>
+        <h3>Your bag</h3>
+        <p>Choose your driver, irons, wedges and ball on the title screen. The Bomber driver hits monster drives but is hard to keep straight. Tour Blades and the Spin Ball shape the ball and make it bite. Game Improvement irons and the Fairway Finder are forgiving. High Bounce wedges help from sand.</p>
+      </div>
+      <div>
+        <h3>Trees, wind and lie</h3>
+        <p>When trees are near your line, the side view shows the flight. <b>Punch</b> stays under the branches and <b>High</b> climbs over them. Wind (flag and arrow) moves the ball sideways and changes carry. Rough, pine straw and bunkers cost distance and shrink the timing window.</p>
+      </div>
+      <div>
+        <h3>Courses</h3>
+        <p>Tap the course on the title screen to switch. <b>Augusta National</b> has 18 holes: tall pines, white sand, Rae's Creek at Amen Corner (11–13) and very fast, tiered greens. Play all 18 or either nine.</p>
       </div>
       <div>
         <h3>Penalties</h3>
-        <p>Water: one stroke, and you drop behind the hazard. Out of bounds (past the white stakes): one stroke, and you replay from the same spot.</p>
+        <p>Water: one stroke, and you drop behind the hazard. Out of bounds (past the white stakes): one stroke, and you replay from the same spot. A hole ends at par + 5.</p>
       </div>
       <div>
         <h3>Playing together</h3>
-        <p>On one iPad, two players take turns. Online, up to 4 players each use their own iPad (any Wi‑Fi or mobile data). The host taps <b>Create game</b> and reads out the code, everyone else joins with it, and the host taps <b>Start game</b>. With <b>Same time</b>, everyone plays their own ball without waiting, and the next hole starts once you've all holed out. <b>Take turns</b> plays in normal golf order.</p>
+        <p>On one iPad, up to 4 players pass and play. Online, up to 4 players each use their own iPad. The host taps <b>Create game</b> and reads out the code, everyone joins with it, and the host taps <b>Start game</b>. With <b>Same time</b>, everyone plays their own ball without waiting. <b>Take turns</b> plays in normal golf order.</p>
       </div>
       <div>
         <h3>View and difficulty</h3>
-        <p>Pinch to zoom the course (or use + and − on a keyboard). <b>Timing</b> on the title screen sets how wide the swing window is: Casual, Standard or Pro. Your round ends with stats: fairways hit, greens in regulation and putts.</p>
+        <p>Pinch to zoom (or + and −). <b>Timing</b> on the title screen sets the swing window and how much of each putt's path you see: Casual, Standard or Pro. Pro also hides the roll-out on long shots.</p>
       </div>
     </div>
     <button id="btnHelpBack" class="btn primary">Got it</button>

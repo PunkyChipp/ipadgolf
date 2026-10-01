@@ -9,36 +9,106 @@ export const FPS = 60;
 // carry/roll in yards on a flat fairway with no wind; up = time for the swing
 // meter to reach 100% (smaller is faster and harder); win = accuracy window scale.
 export const CLUBS = [
-  { id: 'D', name: 'Driver', carry: 250, roll: 22, apex: 32, time: 6.4, up: 0.8, win: 0.8 },
-  { id: '3W', name: '3 Wood', carry: 226, roll: 16, apex: 30, time: 6.0, up: 0.84, win: 0.86 },
-  { id: '3H', name: '3 Hybrid', carry: 205, roll: 11, apex: 29, time: 5.6, up: 0.87, win: 0.92 },
-  { id: '4I', name: '4 Iron', carry: 191, roll: 9, apex: 28, time: 5.4, up: 0.9, win: 0.95 },
-  { id: '5I', name: '5 Iron', carry: 181, roll: 8, apex: 29, time: 5.3, up: 0.91, win: 0.97 },
-  { id: '6I', name: '6 Iron', carry: 171, roll: 7, apex: 30, time: 5.2, up: 0.92, win: 1 },
-  { id: '7I', name: '7 Iron', carry: 160, roll: 6, apex: 31, time: 5.1, up: 0.94, win: 1 },
-  { id: '8I', name: '8 Iron', carry: 148, roll: 5, apex: 32, time: 5.0, up: 0.95, win: 1.03 },
-  { id: '9I', name: '9 Iron', carry: 136, roll: 4, apex: 33, time: 4.9, up: 0.97, win: 1.05 },
-  { id: 'PW', name: 'Pitching Wedge', carry: 124, roll: 3, apex: 33, time: 4.8, up: 0.99, win: 1.08, wedge: true },
-  { id: 'GW', name: 'Gap Wedge', carry: 105, roll: 2.2, apex: 30, time: 4.5, up: 1.01, win: 1.1, wedge: true },
-  { id: 'SW', name: 'Sand Wedge', carry: 85, roll: 1.5, apex: 28, time: 4.2, up: 1.04, win: 1.12, wedge: true },
-  { id: 'LW', name: 'Lob Wedge', carry: 64, roll: 1, apex: 26, time: 3.9, up: 1.07, win: 1.15, wedge: true },
+  { id: 'D', chip: 2.6, name: 'Driver', carry: 250, roll: 22, apex: 32, time: 6.4, up: 0.8, win: 0.8 },
+  { id: '3W', chip: 2.5, name: '3 Wood', carry: 226, roll: 16, apex: 30, time: 6.0, up: 0.84, win: 0.86 },
+  { id: '3H', chip: 2.4, name: '3 Hybrid', carry: 205, roll: 11, apex: 29, time: 5.6, up: 0.87, win: 0.92 },
+  { id: '4I', chip: 2.3, name: '4 Iron', carry: 191, roll: 9, apex: 28, time: 5.4, up: 0.9, win: 0.95 },
+  { id: '5I', chip: 2.2, name: '5 Iron', carry: 181, roll: 8, apex: 29, time: 5.3, up: 0.91, win: 0.97 },
+  { id: '6I', chip: 2.1, name: '6 Iron', carry: 171, roll: 7, apex: 30, time: 5.2, up: 0.92, win: 1 },
+  { id: '7I', chip: 2.0, name: '7 Iron', carry: 160, roll: 6, apex: 31, time: 5.1, up: 0.94, win: 1 },
+  { id: '8I', chip: 1.7, name: '8 Iron', carry: 148, roll: 5, apex: 32, time: 5.0, up: 0.95, win: 1.03 },
+  { id: '9I', chip: 1.4, name: '9 Iron', carry: 136, roll: 4, apex: 33, time: 4.9, up: 0.97, win: 1.05 },
+  { id: 'PW', chip: 1.1, name: 'Pitching Wedge', carry: 124, roll: 3, apex: 33, time: 4.8, up: 0.99, win: 1.08, wedge: true },
+  { id: 'GW', chip: 0.8, name: 'Gap Wedge', carry: 105, roll: 2.2, apex: 30, time: 4.5, up: 1.01, win: 1.1, wedge: true },
+  { id: 'SW', chip: 0.5, name: 'Sand Wedge', carry: 85, roll: 1.5, apex: 28, time: 4.2, up: 1.04, win: 1.12, wedge: true },
+  { id: 'LW', chip: 0.28, name: 'Lob Wedge', carry: 64, roll: 1, apex: 26, time: 3.9, up: 1.07, win: 1.15, wedge: true },
   { id: 'P', name: 'Putter', putter: true, up: 1.15, win: 1 },
 ];
 export const PUTTER = CLUBS.length - 1;
 
 // Shot shapes. Punch stays under the branches and runs out; High climbs over
-// trouble but loses distance and is harder to time.
+// trouble but loses distance and is harder to time. Around the green, Chip
+// flies low and runs like a putt, and Flop floats up and lands softly.
+// chip: how much more (or less) a short shot releases than a normal one.
 export const SHAPES = [
-  { id: 'normal', name: 'Normal', carry: 1, apex: 1, time: 1, roll: 1, rollAdd: 0, win: 1 },
-  { id: 'punch', name: 'Punch', carry: 0.6, apex: 0.13, maxApex: 2.3, time: 0.62, roll: 2.4, rollAdd: 7, win: 1.15 },
-  { id: 'high', name: 'High', carry: 0.88, apex: 1.45, time: 1.1, roll: 0.35, rollAdd: 0, win: 0.85 },
+  { id: 'normal', name: 'Normal', carry: 1, apex: 1, time: 1, roll: 1, rollAdd: 0, win: 1, chip: 1 },
+  { id: 'punch', name: 'Punch', carry: 0.6, apex: 0.13, maxApex: 2.3, time: 0.62, roll: 2.4, rollAdd: 7, win: 1.15, chip: 1.4 },
+  { id: 'high', name: 'High', carry: 0.88, apex: 1.45, time: 1.1, roll: 0.35, rollAdd: 0, win: 0.85, chip: 0.6 },
+  { id: 'chip', name: 'Chip', carry: 0.62, apex: 0.3, time: 0.78, roll: 1, rollAdd: 0, win: 1.12, chip: 1.8, short: true },
+  { id: 'flop', name: 'Flop', carry: 0.6, apex: 2.1, time: 1.3, roll: 0.2, rollAdd: 0, win: 0.78, chip: 0.15, short: true, bite: 1.6 },
 ];
+export const FULL_SHAPES = [0, 1, 2];
+export const SHORT_SHAPES = [0, 3, 4];
+
+// Equipment. Each choice trades distance, forgiveness (timing window), curve,
+// spin and roll. carry/roll/apex multiply; win widens or narrows the timing
+// window; curve scales hooks and slices from timing; shape scales deliberate
+// side spin; spin scales back and top spin.
+const N = { carry: 1, win: 1, curve: 1, shape: 1, spin: 1, roll: 1, apex: 1 };
+export const GEAR = [
+  {
+    slot: 'd', label: 'Driver', options: [
+      { id: 'tour', name: 'Tour 9°', desc: 'Balanced distance and control.', stats: [3, 3, 3] },
+      { id: 'bomber', name: 'Bomber XL', desc: 'Monster drives, but a tight window and big curves.', stats: [5, 1, 2], carry: 1.09, win: 0.74, curve: 1.35, roll: 1.2, apex: 1.05 },
+      { id: 'finder', name: 'Fairway Finder', desc: 'Shorter, but very easy to keep straight.', stats: [2, 5, 3], carry: 0.95, win: 1.3, curve: 0.6, apex: 0.95 },
+    ],
+  },
+  {
+    slot: 'i', label: 'Woods & irons', options: [
+      { id: 'cavity', name: 'Cavity Backs', desc: 'Forgiving all-rounders.', stats: [3, 3, 3] },
+      { id: 'blades', name: 'Tour Blades', desc: 'More spin and much more shaping, but a tighter window.', stats: [3, 2, 5], win: 0.82, spin: 1.3, shape: 1.6 },
+      { id: 'gi', name: 'Game Improvement', desc: 'Longer and easier to hit, with less spin and shaping.', stats: [4, 5, 1], carry: 1.05, win: 1.2, spin: 0.7, shape: 0.7, roll: 1.15 },
+    ],
+  },
+  {
+    slot: 'w', label: 'Wedges', options: [
+      { id: 'std', name: 'All-Purpose', desc: 'Solid from anywhere.', stats: [3, 3, 3] },
+      { id: 'spin', name: 'Spin Milled', desc: 'Huge backspin: zips back on the greens. Fussier timing.', stats: [3, 2, 5], spin: 1.6, win: 0.9, bite: 1.5 },
+      { id: 'bounce', name: 'High Bounce', desc: 'Glides through sand and rough, but spins less.', stats: [3, 5, 2], spin: 0.8, rescue: 1.35 },
+    ],
+  },
+  {
+    slot: 'b', label: 'Ball', options: [
+      { id: 'tour', name: 'Tour Ball', desc: 'Balanced spin and distance.', stats: [3, 3, 3] },
+      { id: 'distance', name: 'Distance Ball', desc: 'Flies further and rolls out, but barely spins.', stats: [5, 3, 1], carry: 1.04, roll: 1.25, spin: 0.6, shape: 0.85 },
+      { id: 'spin', name: 'Spin Ball', desc: 'Grabs the greens and curves on demand, a little shorter.', stats: [2, 3, 5], carry: 0.98, spin: 1.3, shape: 1.25, bite: 1.2 },
+    ],
+  },
+];
+export const GEAR_STATS = ['Distance', 'Forgiveness', 'Spin & shaping'];
+export const DEFAULT_GEAR = { d: 'tour', i: 'cavity', w: 'std', b: 'tour' };
+
+// Combined effect of the bag on one club from one lie.
+export function gearFor(gear, ci, lie) {
+  const club = CLUBS[ci];
+  const out = { ...N, bite: 1 };
+  if (!gear || club.putter) return out;
+  const slots = [club.id === 'D' ? 'd' : club.wedge ? 'w' : 'i', 'b'];
+  for (const slot of slots) {
+    const def = GEAR.find((g) => g.slot === slot);
+    const o = def.options.find((k) => k.id === gear[slot]) || def.options[0];
+    for (const k of Object.keys(N)) if (o[k] != null) out[k] *= o[k];
+    if (o.bite) out.bite *= o.bite;
+    // High bounce wedges are kinder from sand and rough.
+    if (o.rescue && (lie === T.SAND || lie === T.ROUGH || lie === T.DEEP)) {
+      out.win *= o.rescue;
+      out.carry *= 1.06;
+    }
+  }
+  return out;
+}
 export const PUTT_SCALES = [5, 10, 20, 35]; // yards covered at 100% on a flat green
 
 // How each surface slows a rolling ball (yd/s²) and how much it lets a
 // landing ball release forward.
 const DECEL = { [T.TEE]: 2.2, [T.FAIRWAY]: 2.2, [T.FRINGE]: 1.5, [T.GREEN]: 0.62, [T.ROUGH]: 6.5, [T.DEEP]: 13, [T.SAND]: 26, [T.OB]: 6, [T.WATER]: 30 };
 const RELEASE = { [T.TEE]: 1, [T.FAIRWAY]: 1, [T.FRINGE]: 0.7, [T.GREEN]: 0.55, [T.ROUGH]: 0.35, [T.DEEP]: 0.15, [T.SAND]: 0.02, [T.OB]: 0.3 };
+
+// Some courses (Augusta) have faster greens than others.
+function decelAt(hole, ter) {
+  if (ter === T.GREEN && hole.greenDecel) return hole.greenDecel;
+  return DECEL[ter] ?? 3;
+}
 
 // How much backspin can grip on each surface.
 const SPIN_GRIP = { [T.GREEN]: 1, [T.FRINGE]: 0.7, [T.FAIRWAY]: 0.55, [T.TEE]: 0.5, [T.ROUGH]: 0.15 };
@@ -60,8 +130,8 @@ export function lieEffect(lie, club) {
 }
 
 // Accuracy window half-width in meter units (0 = sweet spot, 1 = full power).
-export function meterWindow(lie, club, power, shape = 0, spinMag = 0) {
-  let w = 0.07 * CLUBS[club].win * lieEffect(lie, club).win * (CLUBS[club].putter ? 1 : SHAPES[shape].win);
+export function meterWindow(lie, club, power, shape = 0, spinMag = 0, gear = null) {
+  let w = 0.07 * CLUBS[club].win * lieEffect(lie, club).win * (CLUBS[club].putter ? 1 : SHAPES[shape].win) * gearFor(gear, club, lie).win;
   w *= 1 - 0.12 * Math.min(1, spinMag); // shaping the ball is harder
   if (power > 1) w *= 1 - (power - 1) * 4; // overswing narrows the window
   return Math.max(0.012, w);
@@ -103,7 +173,7 @@ export function simulateShot(hole, ball, input, wind, seed) {
 
   if (club.putter) {
     const dist = Math.max(0, input.power) * (input.puttScale || 10);
-    const decel = DECEL[T.GREEN];
+    const decel = decelAt(hole, T.GREEN);
     const v0 = Math.sqrt(2 * decel * dist);
     res.label = 'Putt';
     roll(hole, ball.x, ball.y, dx * v0, dy * v0, frames, res, 0);
@@ -166,11 +236,18 @@ export function simulateShot(hole, ball, input, wind, seed) {
   let hx = last.x - prev.x, hy = last.y - prev.y;
   const hl = Math.hypot(hx, hy) || 1;
   hx /= hl; hy /= hl;
-  let rollDist = (club.roll * fp.shape.roll + fp.shape.rollAdd) * (RELEASE[land] ?? 0.3) * Math.min(1, p) * (mishit ? 2 : 1);
+  const release = RELEASE[land] ?? 0.3;
+  let rollDist = (club.roll * fp.shape.roll + fp.shape.rollAdd) * release * Math.min(1, p) * (mishit ? 2 : 1);
+  // Short shots come in low and release like a chip: a 9 iron runs out,
+  // a lob wedge barely moves. Full swings carry their spin and stop.
+  // Chip and Flop are measured against the club's normal full swing.
+  const swing = p * (fp.shape.short ? fp.shape.carry : 1);
+  rollDist += carry * club.chip * fp.shape.chip * Math.pow(Math.max(0, 1 - swing), 2) * (release / RELEASE[T.GREEN]);
   if (p > 1) rollDist *= 1.15;
+  rollDist *= fp.g.roll;
   // Topspin releases the ball; backspin grips, and a wedge can zip it backwards.
   rollDist *= 1 + 1.2 * fp.top;
-  const bite = (club.wedge ? 1 : club.carry > 200 ? 0.25 : 0.6) * (SPIN_GRIP[land] ?? 0) * Math.min(1, p) * (mishit ? 0 : 1);
+  const bite = (club.wedge ? 1 : club.carry > 200 ? 0.25 : 0.6) * (SPIN_GRIP[land] ?? 0) * Math.min(1, 0.35 + p) * (mishit ? 0 : 1) * fp.g.bite * (fp.shape.bite || 1);
   rollDist -= fp.back * bite * 8;
   // Side spin kicks the ball sideways as it lands.
   const kick = fp.spin.x * 0.22;
@@ -181,7 +258,7 @@ export function simulateShot(hole, ball, input, wind, seed) {
     rollDist = -rollDist;
     if (rollDist > 0.8) res.events.push({ type: 'spinback', f: frames.length - 1 });
   }
-  const v0 = Math.sqrt(2 * DECEL[land] * rollDist);
+  const v0 = Math.sqrt(2 * decelAt(hole, land) * rollDist);
   roll(hole, last.x, last.y, hx * v0, hy * v0, frames, res, Math.min(apex * 0.06, 1.6));
   return finish(hole, ball, res);
 }
@@ -200,7 +277,7 @@ function roll(hole, x, y, vx, vy, frames, res, hop) {
         res.rolledInto = ter;
         return;
       }
-      const decel = DECEL[ter] ?? 3;
+      const decel = decelAt(hole, ter);
       const [gx, gy] = hole.slopeAt(x, y);
       const ax = -G * gx, ay = -G * gy;
       const sp = Math.hypot(vx, vy);
@@ -295,13 +372,14 @@ export function flightParams(ball, input, wind, r = () => 0.5) {
   const p = input.power;
   const powerDist = p <= 1 ? p : 1 + (p - 1) * 0.8;
   const spin = input.spin || { x: 0, y: 0 };
-  const top = Math.max(0, spin.y), back = Math.max(0, -spin.y);
-  let carry = club.carry * shape.carry * powerDist * lie.dist * (1 + (r() - 0.5) * 2 * lie.spread);
+  const g = gearFor(input.gear, input.club, ball.lie);
+  const top = Math.max(0, spin.y) * g.spin, back = Math.max(0, -spin.y) * g.spin;
+  let carry = club.carry * shape.carry * powerDist * lie.dist * g.carry * (1 + (r() - 0.5) * 2 * lie.spread);
   carry *= 1 - 0.05 * Math.min(1, Math.hypot(spin.x, spin.y));
   if (mishit) carry *= e > 0 ? 0.55 : 0.35;
   else carry *= 1 - Math.min(0.1, Math.max(0, Math.abs(e) - 0.22) * 0.05);
   const flight = club.time * shape.time * (0.45 + 0.55 * Math.min(1, p));
-  let apex = club.apex * shape.apex * (0.4 + 0.6 * Math.min(1, p)) * (mishit && e < 0 ? 0.35 : 1);
+  let apex = club.apex * shape.apex * g.apex * (0.4 + 0.6 * Math.min(1, p)) * (mishit && e < 0 ? 0.35 : 1);
   apex *= (1 - 0.25 * top) * (1 + 0.12 * back);
   if (shape.maxApex) apex = Math.min(apex, shape.maxApex);
   const [dx, dy] = dirOf(input.aim);
@@ -315,8 +393,8 @@ export function flightParams(ball, input, wind, r = () => 0.5) {
     carry, flight, apex, mishit, shape, dx, dy, rx, ry,
     drift: cross * 0.3 * flight * (apex / 30),
     // side spin bends the ball on purpose; timing errors add to it
-    curve: (timingCurve(e) + spin.x * 0.17) * carry,
-    spin, top, back,
+    curve: (timingCurve(e) * g.curve + spin.x * 0.17 * g.shape) * carry,
+    spin, top, back, g,
     push: Math.max(-0.05, Math.min(0.05, e * 0.018)), // start line a touch off with mistimed swings
   };
 }
@@ -377,12 +455,12 @@ export function shotSeed(gameSeed, hole, player, stroke) {
 }
 
 // Club suggestion for a given distance to the pin, allowing for the lie.
-export function suggestClub(dist, lie) {
+export function suggestClub(dist, lie, gear = null) {
   if (lie === T.GREEN) return PUTTER;
   for (let i = CLUBS.length - 2; i >= 0; i--) {
     if (i === 0 && lie !== T.TEE) continue;
     const c = CLUBS[i];
-    if (c.carry * lieEffect(lie, i).dist + c.roll * 0.5 >= dist) return i;
+    if (c.carry * lieEffect(lie, i).dist * gearFor(gear, i, lie).carry + c.roll * 0.5 >= dist) return i;
   }
   return lie === T.TEE ? 0 : 1;
 }

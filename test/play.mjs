@@ -1,7 +1,7 @@
 // Plays every hole with a bot golfer to check the course is fair and the
 // simulation is deterministic. Run with: npm test
 //   skill 0 = perfect swings, higher = sloppier timing (in accuracy-window units)
-import { buildHole, windFor, T, rng } from '../src/course.js';
+import { buildHole, windFor, T, rng, COURSES } from '../src/course.js';
 import { simulateShot, CLUBS, PUTTER, PUTT_SCALES, suggestPuttScale } from '../src/sim.js';
 
 const SEED = Number(process.env.SEED || 7);
@@ -100,21 +100,26 @@ if (process.env.TRACE) {
   process.exit(0);
 }
 let fail = 0;
-for (const skill of [0, 0.8]) {
-  const r = rng(99);
-  let total = 0, par = 0;
-  const per = [];
-  for (let h = 0; h < 9; h++) {
-    let sum = 0;
-    for (let k = 0; k < ROUNDS; k++) sum += playHole(h, skill, r).strokes;
-    const avg = sum / ROUNDS;
-    const hole = buildHole(h, SEED);
-    per.push(`${hole.par}:${avg.toFixed(1)}`);
-    if (skill === 0 && avg > hole.par + 1) fail++;
-    total += avg;
-    par += hole.par;
+for (const course of COURSES) {
+  for (const skill of [0, 0.8]) {
+    const r = rng(99);
+    let total = 0, par = 0;
+    const per = [];
+    for (const h of course.holes) {
+      let sum = 0;
+      for (let k = 0; k < ROUNDS; k++) sum += playHole(h, skill, r).strokes;
+      const avg = sum / ROUNDS;
+      const hole = buildHole(h, SEED);
+      per.push(`${hole.par}:${avg.toFixed(1)}`);
+      if (skill === 0 && avg > hole.par + 1) {
+        fail++;
+        console.log(`  too hard for a perfect bot: ${course.name} ${hole.name}`);
+      }
+      total += avg;
+      par += hole.par;
+    }
+    console.log(`${course.name} skill ${skill}: avg ${total.toFixed(1)} vs par ${par}  [${per.join(' ')}]`);
   }
-  console.log(`skill ${skill}: avg ${total.toFixed(1)} vs par ${par}  [${per.join(' ')}]`);
 }
 process.exit(fail ? 1 : 0);
 
