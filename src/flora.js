@@ -446,8 +446,17 @@ export function makeTreeMaterials(T, atlas, timeU) {
         }`)
       .replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\n normal = normalize(vNormal);')
       .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+        // Foliage reads best with strong sun-and-shade contrast: lean on the
+        // direct light, cool the sky fill, and let backlit leaves glow.
+        reflectedLight.directDiffuse *= 1.3;
+        reflectedLight.indirectDiffuse *= vec3(0.78, 0.84, 0.95);
         float rim = pow(1.0 - abs(dot(normal, normalize(vViewPosition))), 2.5);
-        reflectedLight.indirectDiffuse += diffuseColor.rgb * rim * 0.5;`);
+        reflectedLight.indirectDiffuse += diffuseColor.rgb * rim * 0.35;
+        #if NUM_DIR_LIGHTS > 0
+          vec3 sunV = directionalLights[0].direction;
+          float back = pow(max(0.0, dot(normalize(-vViewPosition), -sunV)), 3.0);
+          reflectedLight.directDiffuse += diffuseColor.rgb * directionalLights[0].color * back * 0.35 * vec3(1.0, 1.08, 0.7);
+        #endif`);
   };
   leaf.customProgramCacheKey = () => 'pl-leaf';
   const bark = new T.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });

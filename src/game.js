@@ -1,11 +1,11 @@
-import { buildHole as buildHoleRaw, windFor, HOLES, COURSES, courseOf, T, TERRAIN_NAMES } from './course.js?v=12';
+import { buildHole as buildHoleRaw, windFor, HOLES, COURSES, courseOf, T, TERRAIN_NAMES } from './course.js?v=13';
 import {
   simulateShot, CLUBS, PUTTER, PUTT_SCALES, SHAPES, FULL_SHAPES, SHORT_SHAPES, GEAR, GEAR_STATS, DEFAULT_GEAR, gearFor, MISHIT, meterWindow, lieEffect, suggestClub, suggestPuttScale, shotSeed, shotLabel, strikeOf, previewShot, flightParams, flightPoint,
-} from './sim.js?v=12';
-import { Renderer } from './render.js?v=12';
-import { Sound } from './audio.js?v=12';
-import { Link, makeCode, cleanCode } from './net.js?v=12';
-import { View3D, parseColor } from './view3d.js?v=12';
+} from './sim.js?v=13';
+import { Renderer } from './render.js?v=13';
+import { Sound } from './audio.js?v=13';
+import { Link, makeCode, cleanCode } from './net.js?v=13';
+import { View3D, parseColor } from './view3d.js?v=13';
 
 const $ = (s) => document.querySelector(s);
 

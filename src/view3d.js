@@ -13,7 +13,7 @@
 const TAU = Math.PI * 2;
 const EDGE = 6; // terrain height at the edge of the course area
 const STEP = 1; // terrain grid spacing, yards
-import { paintAtlas, makeTrees, makeTreeMaterials, makeGrassGeo, makeGrassMaterial } from './flora.js?v=12';
+import { paintAtlas, makeTrees, makeTreeMaterials, makeGrassGeo, makeGrassMaterial } from './flora.js?v=13';
 const VERSIONED = new URL(import.meta.url).search; // same ?v= as this file
 
 // Colours and light for each course (sRGB hex).
