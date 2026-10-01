@@ -361,9 +361,10 @@ function trunk(T, { h = 0.55, r0 = 0.07, r1 = 0.04, branches = 3, bend = 0.04, s
     parts.push(g);
   }
   const merged = T.mergeGeometries(parts.map((g) => (g.index ? g.toNonIndexed() : g)));
-  merged.deleteAttribute('uv');
+  // Bark wraps twice round the trunk and repeats up its height.
+  const uv = merged.attributes.uv;
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 2, uv.getY(i) * h * 4);
   shadeBy(merged, 0, h + 0.2);
-  merged.setAttribute('uv', new T.Float32BufferAttribute(new Float32Array(merged.attributes.position.count * 2).fill(0.9), 2));
   return merged;
 }
 
@@ -378,6 +379,8 @@ function palmTrunk(T) {
     col.push(c, c * 0.95, c * 0.86);
   }
   g.setAttribute('color', new T.Float32BufferAttribute(col, 3));
+  const uv = g.attributes.uv;
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getY(i) * 2, uv.getX(i) * 6);
   return g;
 }
 
@@ -412,7 +415,9 @@ export function makeTreeMaterials(T, atlas, timeU) {
   const leaf = new T.MeshStandardMaterial({ map: atlas, vertexColors: true, alphaTest: 0.5, side: T.DoubleSide, roughness: 0.9, metalness: 0 });
   leaf.onBeforeCompile = (sh) => {
     sh.uniforms.uTime = timeU;
-    sh.vertexShader = 'uniform float uTime;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+    sh.vertexShader = 'uniform float uTime; varying vec3 vLocal; varying vec3 vLocalN;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+      vLocal = position;
+      vLocalN = normal;
       #ifdef USE_INSTANCING
         vec2 ip = vec2(instanceMatrix[3][0], instanceMatrix[3][1]);
       #else
@@ -422,11 +427,36 @@ export function makeTreeMaterials(T, atlas, timeU) {
       float sw = sin(uTime * 1.1 + ip.x * 0.13 + ip.y * 0.07) * 0.6 + sin(uTime * 2.7 + ip.y * 0.21 + position.x * 9.0) * 0.25;
       transformed.x += sw * 0.02 * hgt;
       transformed.y += sw * 0.013 * hgt;`);
-    sh.fragmentShader = sh.fragmentShader
+    sh.fragmentShader = 'varying vec3 vLocal; varying vec3 vLocalN;\n' + sh.fragmentShader
+      .replace('#include <map_fragment>', `#include <map_fragment>
+        // Canopy bodies (mapped to the solid slot) get the dense foliage
+        // texture wrapped round them, blended across the three axes.
+        if (vMapUv.x > 0.752) {
+          vec3 q = vLocal * 7.0;
+          vec3 bw = pow(abs(normalize(vLocalN)), vec3(4.0));
+          bw /= bw.x + bw.y + bw.z;
+          vec2 r1 = q.yz, r2 = q.xz, r3 = q.xy;
+          vec3 f1 = textureGrad(map, vec2(0.755 + fract(r1.x) * 0.24, 0.01 + fract(r1.y) * 0.98), dFdx(r1) * vec2(0.24, 0.98), dFdy(r1) * vec2(0.24, 0.98)).rgb;
+          vec3 f2 = textureGrad(map, vec2(0.755 + fract(r2.x) * 0.24, 0.01 + fract(r2.y) * 0.98), dFdx(r2) * vec2(0.24, 0.98), dFdy(r2) * vec2(0.24, 0.98)).rgb;
+          vec3 f3 = textureGrad(map, vec2(0.755 + fract(r3.x) * 0.24, 0.01 + fract(r3.y) * 0.98), dFdx(r3) * vec2(0.24, 0.98), dFdy(r3) * vec2(0.24, 0.98)).rgb;
+          diffuseColor.rgb *= (f1 * bw.x + f2 * bw.y + f3 * bw.z) * 1.85;
+        } else {
+          // Leaf cards: undo the texture's average darkness.
+          diffuseColor.rgb *= 1.7;
+        }`)
       .replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\n normal = normalize(vNormal);')
       .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+        // Foliage reads best with strong sun-and-shade contrast: lean on the
+        // direct light, cool the sky fill, and let backlit leaves glow.
+        reflectedLight.directDiffuse *= 1.3;
+        reflectedLight.indirectDiffuse *= vec3(0.78, 0.84, 0.95);
         float rim = pow(1.0 - abs(dot(normal, normalize(vViewPosition))), 2.5);
-        reflectedLight.indirectDiffuse += diffuseColor.rgb * rim * 0.5;`);
+        reflectedLight.indirectDiffuse += diffuseColor.rgb * rim * 0.35;
+        #if NUM_DIR_LIGHTS > 0
+          vec3 sunV = directionalLights[0].direction;
+          float back = pow(max(0.0, dot(normalize(-vViewPosition), -sunV)), 3.0);
+          reflectedLight.directDiffuse += diffuseColor.rgb * directionalLights[0].color * back * 0.35 * vec3(1.0, 1.08, 0.7);
+        #endif`);
   };
   leaf.customProgramCacheKey = () => 'pl-leaf';
   const bark = new T.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
