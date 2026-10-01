@@ -1,6 +1,6 @@
 // Shot simulation. Pure and deterministic: the same inputs and seed always
 // give the same result, so two iPads can replay each other's shots exactly.
-import { T, TERRAIN_NAMES, rng, hashSeed } from './course.js?v=13';
+import { T, TERRAIN_NAMES, rng, hashSeed } from './course.js?v=14';
 
 export const G = 10.72; // gravity, yards/s²
 export const CUP_R = 0.075; // a little larger than a real cup (0.059 yd)
@@ -149,12 +149,14 @@ export function shotLabel(e) {
 }
 
 // What kind of strike a timing error gives, for a right-handed golfer.
-// Tapping early (e > 0) leaves the face open: fades and slices, and with
-// irons the dreaded shank off the hosel. Tapping late (e < 0) shuts it:
-// draws and hooks, and the thin and fat strikes. Deliberate shaping pays off when it is timed
-// well, gets overcooked when mistimed the same way, and can double-cross
-// when mistimed the other way.
-export function strikeOf(e, spinX = 0, clubIdx = 6, lie = T.FAIRWAY) {
+// The timing error acc is positive when the tap comes early (before the
+// line). Releasing early shuts the face: draws and hooks, and the thin and
+// fat strikes. Releasing late leaves it open: fades and slices, and with
+// irons the dreaded shank off the hosel. Inside, e > 0 means open (right).
+// Deliberate shaping pays off when it is timed well, gets overcooked when
+// mistimed the same way, and can double-cross when mistimed the other way.
+export function strikeOf(acc, spinX = 0, clubIdx = 6, lie = T.FAIRWAY) {
+  const e = -acc;
   const a = Math.abs(e);
   const club = CLUBS[clubIdx] || CLUBS[6];
   const wood = club.carry >= 200;
@@ -172,7 +174,7 @@ export function strikeOf(e, spinX = 0, clubIdx = 6, lie = T.FAIRWAY) {
     if (kind === 'shank') Object.assign(k, { label: 'Shank!', carry: 0.38, apex: 0.35, flight: 0.7, push: 1.15, roll: 1.3, bite: 0 });
     if (kind === 'banana') Object.assign(k, { label: 'Banana slice', carry: 0.72, apex: 0.85, curveAdd: 0.42, roll: 0.8, bite: 0 });
     if (kind === 'sky') Object.assign(k, { label: 'Skied it!', carry: 0.42, apex: 2.3, flight: 1.25, roll: 0.15, bite: 0, push: (h - 0.25) * 0.1 });
-    if (kind === 'top') Object.assign(k, { label: 'Topped it', carry: 0.16, apex: 0.06, flight: 0.45, roll: 2.2, bite: 0, push: -0.03 });
+    if (kind === 'top') Object.assign(k, { label: 'Topped it', carry: 0.1, apex: 0.05, flight: 0.4, roll: 1.1, bite: 0, push: -0.03 });
     if (kind === 'duff') Object.assign(k, { label: 'Chunked it', carry: 0.3, apex: 0.4, flight: 0.6, roll: 0.5, bite: 0 });
     return k;
   }
@@ -564,10 +566,10 @@ export function flightParams(ball, input, wind, r = () => 0.5) {
     carry, flight, apex, mishit, shape, dx, dy, rx, ry,
     drift: cross * 0.3 * flight * (apex / 30),
     // side spin bends the ball on purpose; timing errors add to it
-    curve: (timingCurve(e) * g.curve * st.timing + spin.x * 0.17 * g.shape * st.intended + st.curveAdd) * carry,
+    curve: (timingCurve(-e) * g.curve * st.timing + spin.x * 0.17 * g.shape * st.intended + st.curveAdd) * carry,
     spin, top, back, g, strike: st,
     // Start line a touch off with mistimed swings; way off with a shank.
-    push: st.push || Math.max(-0.05, Math.min(0.05, e * 0.018)),
+    push: st.push || Math.max(-0.05, Math.min(0.05, -e * 0.018)),
   };
 }
 
