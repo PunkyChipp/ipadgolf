@@ -1,8 +1,8 @@
 // Drawing. The course is painted once per hole into offscreen canvases (one
 // for the whole hole, one sharper one around the green); each frame draws
 // those through a rotating, zooming camera and adds balls, flag and effects.
-import { T, inEllipse, rng, hashSeed } from './course.js?v=9';
-import { CUP_R } from './sim.js?v=9';
+import { T, inEllipse, rng, hashSeed } from './course.js?v=10';
+import { CUP_R } from './sim.js?v=10';
 
 const PX = 3; // pixels per yard for the whole-hole layer
 const PXG = 16; // pixels per yard for the green layer
@@ -124,7 +124,7 @@ export class Renderer {
   }
 
   // Paint the course into a canvas covering `box` (world yards) at `px` px/yd.
-  paint(box, px) {
+  paint(box, px, { markers = true } = {}) {
     const hole = this.hole;
     const cv = document.createElement('canvas');
     cv.width = Math.ceil(box.w * px);
@@ -195,7 +195,7 @@ export class Renderer {
     c.fillStyle = 'rgba(255,255,255,0.08)';
     for (let i = -t.ry; i < t.ry; i += 2.4) c.fillRect(-t.rx, i, t.rx * 2, 1.2);
     c.restore();
-    for (const k of [-1, 1]) {
+    for (const k of markers ? [-1, 1] : []) {
       const mx = t.x + Math.cos(t.ang + Math.PI / 2) * 3 * k, my = t.y + Math.sin(t.ang + Math.PI / 2) * 3 * k;
       c.fillStyle = 'rgba(0,0,0,0.25)';
       c.beginPath();
@@ -445,6 +445,66 @@ export class Renderer {
     }
     trees.sort((a, b) => a.y - b.y);
     for (const tr of trees) drawTree(c, tr);
+    return cv;
+  }
+
+  // A plain map of surfaces for the 3D view (no decoration): red = rough
+  // (dim) or sand (bright), green = short grass (fairway, tee, fringe, green),
+  // blue = water.
+  paintMask(box, px) {
+    const hole = this.hole;
+    const cv = document.createElement('canvas');
+    cv.width = Math.ceil(box.w * px);
+    cv.height = Math.ceil(box.h * px);
+    const c = cv.getContext('2d');
+    c.setTransform(px, 0, 0, px, -box.x * px, -box.y * px);
+    const P = hole.path;
+    c.fillStyle = '#000';
+    c.fillRect(box.x, box.y, box.w, box.h);
+    const discs = (from, to, extra) => {
+      c.beginPath();
+      for (const p of P) {
+        if (p.s < from || p.s > to) continue;
+        const rr = hole.halfWidth(p.s) + extra;
+        c.moveTo(p.x + rr, p.y);
+        c.arc(p.x, p.y, rr, 0, TAU);
+      }
+    };
+    discs(0, Infinity, hole.roughW);
+    c.fillStyle = 'rgb(70,0,0)';
+    c.fill('nonzero');
+    if (hole.fwFrom < hole.fwTo) {
+      discs(hole.fwFrom, hole.fwTo, 0);
+      c.fillStyle = 'rgb(70,255,0)';
+      c.fill('nonzero');
+    }
+    const t = hole.tee;
+    c.save();
+    c.translate(t.x, t.y);
+    c.rotate(t.rot);
+    c.fillStyle = 'rgb(70,255,0)';
+    c.fillRect(-t.rx, -t.ry, t.rx * 2, t.ry * 2);
+    c.restore();
+    c.fillStyle = c.strokeStyle = 'rgb(0,0,255)';
+    c.lineCap = 'round';
+    for (const w of hole.water) {
+      if (w.line) {
+        linePath(c, w.line);
+        c.lineWidth = w.w;
+        c.stroke();
+      } else {
+        ellipsePath(c, w);
+        c.fill();
+      }
+    }
+    ellipsePath(c, hole.green, FRINGE_W);
+    c.fillStyle = 'rgb(70,255,0)';
+    c.fill();
+    c.fillStyle = 'rgb(255,0,0)';
+    for (const b of hole.bunkers) {
+      ellipsePath(c, b);
+      c.fill();
+    }
     return cv;
   }
 

@@ -1,11 +1,11 @@
-import { buildHole as buildHoleRaw, windFor, HOLES, COURSES, courseOf, T, TERRAIN_NAMES } from './course.js?v=9';
+import { buildHole as buildHoleRaw, windFor, HOLES, COURSES, courseOf, T, TERRAIN_NAMES } from './course.js?v=10';
 import {
   simulateShot, CLUBS, PUTTER, PUTT_SCALES, SHAPES, FULL_SHAPES, SHORT_SHAPES, GEAR, GEAR_STATS, DEFAULT_GEAR, gearFor, MISHIT, meterWindow, lieEffect, suggestClub, suggestPuttScale, shotSeed, shotLabel, previewShot, flightParams, flightPoint,
-} from './sim.js?v=9';
-import { Renderer } from './render.js?v=9';
-import { Sound } from './audio.js?v=9';
-import { Link, makeCode, cleanCode } from './net.js?v=9';
-import { View3D, parseColor } from './view3d.js?v=9';
+} from './sim.js?v=10';
+import { Renderer } from './render.js?v=10';
+import { Sound } from './audio.js?v=10';
+import { Link, makeCode, cleanCode } from './net.js?v=10';
+import { View3D, parseColor } from './view3d.js?v=10';
 
 const $ = (s) => document.querySelector(s);
 
@@ -1561,6 +1561,22 @@ function flagColor() {
 }
 
 const d2 = (a) => [Math.cos(a), Math.sin(a)];
+const groundZ = (x, y) => (V3.ok && V3.hole === hole ? V3.heightAt(x, y) : 0);
+
+function landIndex(res, putter) {
+  if (putter) return 0;
+  const land = res.events.find((e) => e.type === 'land' || e.type === 'tree');
+  return land ? land.f : res.frames.length - 1;
+}
+
+// The 3D ground has hills the simulation doesn't know about. A ball in the air
+// flies on a line from the ground where it started to where it lands; once
+// down, it follows the ground.
+function lifted(fr, landF, i) {
+  if (i > landF || landF === 0) return fr[i].z + groundZ(fr[i].x, fr[i].y);
+  const h0 = groundZ(fr[0].x, fr[0].y), L = fr[landF];
+  return fr[i].z + h0 + (groundZ(L.x, L.y) - h0) * (i / landF);
+}
 
 // The camera director: where the 3D camera wants to be right now.
 function camera3DTarget() {
@@ -1578,7 +1594,7 @@ function camera3DTarget() {
     };
     const e = at(len * (-0.05 + t * 0.72));
     const ease = t * t * (3 - 2 * t);
-    return { eye: [e[0], e[1], 46 - ease * 22], target: [hole.green.x, hole.green.y, 0], speed: 0 };
+    return { eye: [e[0], e[1], groundZ(e[0], e[1]) + 46 - ease * 22], target: [hole.green.x, hole.green.y, groundZ(hole.green.x, hole.green.y)], speed: 0 };
   }
   // A shot in the air: chase it, then cut to a camera by the landing spot.
   const a = animFor(p) || (!G.simul ? U.anims[0] : null) || (pl.holed ? U.anims[0] : null);
@@ -1594,7 +1610,7 @@ function camera3DTarget() {
   let back, high, ahead;
   if ((aiming && CLUBS[U.club].putter) || (!aiming && ball.lie === T.GREEN)) {
     const k = Math.min(dist, 16);
-    back = 2.4 + k * 0.28; high = 1.4 + k * 0.24; ahead = Math.max(1.5, Math.min(dist, 16) * 0.7);
+    back = 2.2 + k * 0.25; high = 1.5 + k * 0.24; ahead = Math.max(1.2, Math.min(dist, 16) * 0.45);
   } else if ((aiming && isShortGame(ball)) || dist < 70) {
     back = 7.5; high = 3; ahead = Math.min(aiming ? U.target : dist, 60) * 0.55;
   } else {
@@ -1604,7 +1620,8 @@ function camera3DTarget() {
   // Stand a little to the side, like a TV camera behind the player, so the
   // flight arc reads as a curve rather than a straight line.
   const side = back * 0.12;
-  return { eye: [ball.x - dx * back + dy * side, ball.y - dy * back - dx * side, high], target: [ball.x + dx * ahead, ball.y + dy * ahead, 0], speed: 3.2 };
+  const gz = groundZ(ball.x, ball.y);
+  return { eye: [ball.x - dx * back + dy * side, ball.y - dy * back - dx * side, gz + high], target: [ball.x + dx * ahead, ball.y + dy * ahead, gz], speed: 3.2 };
 }
 
 function chaseCam(a) {
@@ -1615,42 +1632,53 @@ function chaseCam(a) {
     const s0 = fr[0];
     const ux = hole.pin.x - s0.x, uy = hole.pin.y - s0.y, ul = Math.hypot(ux, uy) || 1;
     const back = Math.min(5, 1.5 + ul * 0.08);
-    return { eye: [hole.pin.x + (ux / ul) * back - (uy / ul) * 0.6, hole.pin.y + (uy / ul) * back + (ux / ul) * 0.6, 0.45 + back * 0.08], target: [f.x, f.y, f.z * 0.9 + 0.05], speed: a.i < 3 ? 0 : 6 };
+    const ex = hole.pin.x + (ux / ul) * back - (uy / ul) * 0.6, ey = hole.pin.y + (uy / ul) * back + (ux / ul) * 0.6;
+    const fz = lifted(fr, landIndex(a.res, CLUBS[a.input.club].putter), Math.min(a.i, fr.length - 1));
+    return { eye: [ex, ey, groundZ(ex, ey) + 0.45 + back * 0.08], target: [f.x, f.y, fz + 0.05], speed: a.i < 3 ? 0 : 6 };
   }
   const club = CLUBS[a.input.club];
   const [dx, dy] = d2(a.input.aim);
-  if (club.putter) return { eye: [f.x - dx * 3, f.y - dy * 3, 1.15], target: [f.x + dx * 3, f.y + dy * 3, 0], speed: 4 };
+  if (club.putter) {
+    const ex = f.x - dx * 3, ey = f.y - dy * 3;
+    return { eye: [ex, ey, groundZ(ex, ey) + 1.15], target: [f.x + dx * 3, f.y + dy * 3, groundZ(f.x, f.y)], speed: 4 };
+  }
   if (a.landF == null) {
-    const land = a.res.events.find((e) => e.type === 'land' || e.type === 'tree');
-    a.landF = land ? land.f : fr.length - 1;
+    a.landF = landIndex(a.res, false);
     let apex = 0;
     for (let i = 0; i < a.landF; i++) if (fr[i].z > fr[apex].z) apex = i;
     a.apexF = apex;
   }
   const L = fr[a.landF];
   const carry = Math.hypot(L.x - fr[0].x, L.y - fr[0].y);
+  const fz = lifted(fr, a.landF, Math.min(a.i, fr.length - 1));
+  const gz = groundZ(f.x, f.y);
   // Broadcast style: for a long shot, cut to a camera beyond the landing area
   // looking back as the ball drops in.
   if (carry > 110 && a.i >= a.apexF + (a.landF - a.apexF) * 0.3) {
     if (!a.cut) {
       a.cut = true;
       const side = (a.p + G.n) % 2 ? 1 : -1;
-      a.cutEye = [L.x + dx * 30 - dy * 10 * side, L.y + dy * 30 + dx * 10 * side, 6.5];
-      U.cam3 = { eye: a.cutEye.slice(), target: [f.x, f.y, f.z] };
+      const cx = L.x + dx * 30 - dy * 10 * side, cy = L.y + dy * 30 + dx * 10 * side;
+      a.cutEye = [cx, cy, Math.max(groundZ(cx, cy), groundZ(L.x, L.y)) + 6.5];
+      U.cam3 = { eye: a.cutEye.slice(), target: [f.x, f.y, fz] };
     }
-    return { eye: a.cutEye, target: [f.x, f.y, f.z * 0.8], speed: 6 };
+    return { eye: a.cutEye, target: [f.x, f.y, gz + (fz - gz) * 0.8], speed: 6 };
   }
-  return { eye: [f.x - dx * 15, f.y - dy * 15, 4 + f.z * 0.75], target: [f.x + dx * 20, f.y + dy * 20, f.z * 0.6], speed: 5 };
+  return { eye: [f.x - dx * 15, f.y - dy * 15, gz + 4 + (fz - gz) * 0.75], target: [f.x + dx * 20, f.y + dy * 20, gz + (fz - gz) * 0.6], speed: 5 };
 }
 
 function updateCamera3D(dt) {
   const want = camera3DTarget();
+  // Never let the camera sink into a hill.
+  want.eye = want.eye.slice();
+  want.eye[2] = Math.max(want.eye[2], groundZ(want.eye[0], want.eye[1]) + 1.3);
   if (!U.cam3 || want.speed === 0) {
     U.cam3 = { eye: want.eye.slice(), target: want.target.slice() };
     return;
   }
   const k = 1 - Math.exp(-dt * want.speed);
   for (const key of ['eye', 'target']) for (let i = 0; i < 3; i++) U.cam3[key][i] += (want[key][i] - U.cam3[key][i]) * k;
+  U.cam3.eye[2] = Math.max(U.cam3.eye[2], groundZ(U.cam3.eye[0], U.cam3.eye[1]) + 1.1);
 }
 
 function render3D(dt) {
@@ -1662,7 +1690,7 @@ function render3D(dt) {
   if (U.nearKey !== nearKey && U.phase !== 'flight') {
     U.nearKey = nearKey;
     const box = { x: nb.x - 40, y: nb.y - 40, w: 80, h: 80 };
-    V3.setNear(R.paint(box, 9), box);
+    V3.setNear(R.paint(box, 9, { markers: false }), box);
   }
   const multi = G.players.length > 1;
   const vp = viewport();
@@ -1676,10 +1704,11 @@ function render3D(dt) {
   for (const a of U.anims) {
     const fr = a.res.frames;
     const f = fr[a.i];
-    scene.balls.push({ x: f.x, y: f.y, z: f.z, col: parseColor(COLORS[a.p]) });
+    const lf = landIndex(a.res, CLUBS[a.input.club].putter);
+    scene.balls.push({ x: f.x, y: f.y, z: f.z, zAbs: lifted(fr, lf, a.i), col: parseColor(COLORS[a.p]) });
     const t = [];
-    for (let i = 0; i <= a.i; i += 2) t.push([fr[i].x, fr[i].y, fr[i].z + 0.05]);
-    t.push([f.x, f.y, f.z + 0.05]);
+    for (let i = 0; i <= a.i; i += 2) t.push([fr[i].x, fr[i].y, lifted(fr, lf, i) + 0.05]);
+    t.push([f.x, f.y, lifted(fr, lf, a.i) + 0.05]);
     scene.trails.push(t.slice(-160));
   }
   const ball = currentBall();
@@ -1696,8 +1725,8 @@ function render3D(dt) {
     } else {
       const lf = Math.max(1, Math.min(pv.landF, fr.length - 1));
       const arc = [];
-      for (let i = 0; i <= lf; i += 2) arc.push([fr[i].x, fr[i].y, fr[i].z + 0.06]);
-      arc.push([fr[lf].x, fr[lf].y, fr[lf].z + 0.06]);
+      for (let i = 0; i <= lf; i += 2) arc.push([fr[i].x, fr[i].y, lifted(fr, lf, i) + 0.06]);
+      arc.push([fr[lf].x, fr[lf].y, lifted(fr, lf, lf) + 0.06]);
       const showRoll = store.get('difficulty', 'standard') !== 'pro' || isShortGame();
       const roll = [];
       if (showRoll) for (let i = lf; i < fr.length; i += 4) roll.push([fr[i].x, fr[i].y]);
@@ -1713,12 +1742,20 @@ function render3D(dt) {
   scene.slope = (ball.lie === T.GREEN || ball.lie === T.FRINGE || (U.phase === 'aim' && CLUBS[U.club].putter)) && toPin(hole, ball) < 30;
   drawSide();
   V3.draw(scene);
-  // 2D overlay: labels, popups.
+  // 2D overlay: a soft lens vignette, then labels and popups.
   R.clearOverlay();
   const ctx = R.ctx;
   ctx.setTransform(R.dpr, 0, 0, R.dpr, 0, 0);
+  {
+    const w = window.innerWidth, h = window.innerHeight;
+    const g = ctx.createRadialGradient(w / 2, h * 0.45, Math.min(w, h) * 0.35, w / 2, h * 0.45, Math.hypot(w, h) * 0.62);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, 'rgba(0,0,0,0.38)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+  }
   for (const l of labels) {
-    const p = V3.project(l.x, l.y, l.tag ? 0 : 0.3);
+    const p = V3.project(l.x, l.y, groundZ(l.x, l.y) + (l.tag ? 0 : 0.3));
     if (!p) continue;
     ctx.font = '800 13px "Nunito", ui-rounded, system-ui, sans-serif';
     const w = ctx.measureText(l.text).width + 12;
@@ -2306,7 +2343,8 @@ canvas.addEventListener('wheel', (e) => {
 }, { passive: false });
 
 function aimAt(sx, sy) {
-  const [wx, wy] = use3D() ? V3.toWorld(sx, sy) : R.toWorld(sx, sy);
+  const bz = currentBall();
+  const [wx, wy] = use3D() ? V3.toWorld(sx, sy, groundZ(bz.x, bz.y)) : R.toWorld(sx, sy);
   const b = currentBall();
   const d = Math.hypot(wx - b.x, wy - b.y);
   if (d < 0.5) return;
