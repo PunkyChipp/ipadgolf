@@ -6,6 +6,7 @@ No build step and no dependencies: plain HTML, CSS and JavaScript modules.
 
 ## How to play
 
+- **3D view:** you play from behind the ball, like a TV broadcast. Each hole opens with a flyover (tap to skip). Before you swing you see the flight arc in the air, the landing ring and the roll-out. In flight the camera chases the ball, then cuts to a camera beyond the landing area for long shots, with a glowing tracer. Putts that drop go into slow motion. Every course has its own sky and light: spring sun at Augusta, grey sea skies at St Andrews, a golden sunset at Pebble Beach. *2D* switches to the classic top-down view (also used if the device has no WebGL), and *Map* shows the whole hole.
 - **Aim:** drag on the course to where you want the ball to land. The ring is the landing spot, with its yardage. The dotted trail after it shows the roll-out, ending where the ball should stop (no wind, pure strike). The arrow buttons give fine aim. The guide turns red if the shot finds trees, water or out of bounds.
 - **Swing:** three taps on the meter.
   1. Tap to start.
@@ -135,7 +136,8 @@ Opening `index.html` straight from the file system won't work, because browsers 
 
 - `src/course.js`: the courses, holes and terrain (fairway, rough, bunkers, water, trees, green slopes and tiers). No browser code.
 - `src/sim.js`: clubs, equipment, ball flight, wind, spin, bounces, roll and putting. Deterministic, so every iPad replays a shot identically.
-- `src/render.js`: draws the course, balls, flag and effects through a rotating, zooming camera.
+- `src/render.js`: paints the course and draws the top-down 2D view.
+- `src/view3d.js`: the WebGL 3D view: the painted course as the ground, billboard trees, sky, tracer, flight arc and the camera maths.
 - `src/game.js`: turns, the swing meter, scoring, menus and saving.
 - `src/net.js`: the online link.
 - `src/audio.js`: sound effects, generated in code.

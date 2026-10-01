@@ -47,6 +47,14 @@ canvas#game {
   display: block;
   touch-action: none;
 }
+/* The 3D view sits underneath; the 2D canvas above it takes the touches. */
+canvas#game3d {
+  position: fixed;
+  inset: 0;
+  display: block;
+  pointer-events: none;
+  visibility: hidden;
+}
 
 button {
   font: inherit;

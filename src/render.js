@@ -1,8 +1,8 @@
 // Drawing. The course is painted once per hole into offscreen canvases (one
 // for the whole hole, one sharper one around the green); each frame draws
 // those through a rotating, zooming camera and adds balls, flag and effects.
-import { T, inEllipse, rng, hashSeed } from './course.js?v=8';
-import { CUP_R } from './sim.js?v=8';
+import { T, inEllipse, rng, hashSeed } from './course.js?v=9';
+import { CUP_R } from './sim.js?v=9';
 
 const PX = 3; // pixels per yard for the whole-hole layer
 const PXG = 16; // pixels per yard for the green layer
@@ -745,11 +745,33 @@ export class Renderer {
     this.particles.push({ x, y, r0, r1, color, life, max: life, ring: true });
   }
 
+  // Particle physics, shared by the top-down and 3D views.
+  stepParticles(dt) {
+    for (const p of this.particles) {
+      p.life -= dt;
+      if (p.ring) continue;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vz -= 12 * dt;
+      p.z = Math.max(0, p.z + p.vz * dt);
+    }
+    this.particles = this.particles.filter((p) => p.life > 0);
+  }
+
+  get palette() {
+    return C;
+  }
+
+  // In 3D the 2D canvas is a transparent overlay for labels and popups.
+  clearOverlay() {
+    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.ctx.clearRect(0, 0, this.cv.width, this.cv.height);
+  }
+
   drawParticles(dt, scale) {
     const ctx = this.ctx;
     const px = 1 / scale;
     for (const p of this.particles) {
-      p.life -= dt;
       const f = Math.max(0, p.life / p.max);
       ctx.globalAlpha = f;
       if (p.ring) {
@@ -759,10 +781,6 @@ export class Renderer {
         ctx.arc(p.x, p.y, p.r1 + (p.r0 - p.r1) * f, 0, TAU);
         ctx.stroke();
       } else {
-        p.x += p.vx * dt;
-        p.y += p.vy * dt;
-        p.vz -= 12 * dt;
-        p.z = Math.max(0, p.z + p.vz * dt);
         ctx.fillStyle = p.color;
         ctx.beginPath();
         ctx.arc(p.x, p.y - p.z * 0.3, Math.max(p.size, 1.2 * px), 0, TAU);
@@ -770,7 +788,6 @@ export class Renderer {
       }
     }
     ctx.globalAlpha = 1;
-    this.particles = this.particles.filter((p) => p.life > 0);
   }
 }
 

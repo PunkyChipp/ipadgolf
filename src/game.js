@@ -1,10 +1,11 @@
-import { buildHole as buildHoleRaw, windFor, HOLES, COURSES, courseOf, T, TERRAIN_NAMES } from './course.js?v=8';
+import { buildHole as buildHoleRaw, windFor, HOLES, COURSES, courseOf, T, TERRAIN_NAMES } from './course.js?v=9';
 import {
   simulateShot, CLUBS, PUTTER, PUTT_SCALES, SHAPES, FULL_SHAPES, SHORT_SHAPES, GEAR, GEAR_STATS, DEFAULT_GEAR, gearFor, MISHIT, meterWindow, lieEffect, suggestClub, suggestPuttScale, shotSeed, shotLabel, previewShot, flightParams, flightPoint,
-} from './sim.js?v=8';
-import { Renderer } from './render.js?v=8';
-import { Sound } from './audio.js?v=8';
-import { Link, makeCode, cleanCode } from './net.js?v=8';
+} from './sim.js?v=9';
+import { Renderer } from './render.js?v=9';
+import { Sound } from './audio.js?v=9';
+import { Link, makeCode, cleanCode } from './net.js?v=9';
+import { View3D, parseColor } from './view3d.js?v=9';
 
 const $ = (s) => document.querySelector(s);
 
@@ -50,6 +51,7 @@ const store = {
 };
 
 const R = new Renderer($('#game'));
+const V3 = new View3D($('#game3d'));
 const sound = new Sound(store.get('muted', false));
 const meterCv = $('#meter');
 const mctx = meterCv.getContext('2d');
@@ -182,6 +184,8 @@ const U = {
   anims: [],
   queue: [],
   cam: { x: 0, y: 0, rot: 0, scale: 2 },
+  cam3: null, // 3D camera { eye, target }
+  introDur: 1.9,
   zoom: 1,
   mapView: false,
   dragging: null,
@@ -449,6 +453,7 @@ function viewport() {
 
 function resize() {
   R.resize(window.innerWidth, window.innerHeight, Math.min(window.devicePixelRatio || 1, 2));
+  V3.resize(window.innerWidth, window.innerHeight, Math.min(window.devicePixelRatio || 1, 2));
   const r = meterCv.getBoundingClientRect();
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   meterCv.width = Math.round(r.width * dpr);
@@ -541,13 +546,17 @@ function loadHoleView() {
   hole = buildHole(G.holes[G.h], G.seed);
   wind = windFor(G.holes[G.h], G.seed);
   R.setHole(hole);
+  V3.setHole(hole, R, R.palette);
   updateHud();
 }
 
 function beginHole() {
   loadHoleView();
   U.phase = 'intro';
-  U.introT = 1.9;
+  // The 3D view opens with a flyover of the hole; tap to skip it.
+  U.introDur = use3D() ? 3.6 : 1.9;
+  U.introT = U.introDur;
+  U.cam3 = null;
   U.mapView = false;
   U.zoom = 1;
   U.aimFor = '';
@@ -618,6 +627,7 @@ function takeShot(power, acc) {
   const p = me();
   const pl = G.players[p];
   const input = shotInput(power, acc);
+  if (!CLUBS[U.club].putter) sound.whoosh(power);
   const res = simulateShot(hole, pl.ball, input, wind, shotSeed(G.seed, pl.h, p, pl.shots));
   if (U.online) U.online.link.send({ t: 'shot', p, k: pl.shots, h: pl.h, input, name: pl.name });
   U.swing = { phase: 'idle' };
@@ -652,7 +662,9 @@ function stepAnims(dt) {
 function stepAnim(a, dt) {
   const frames = a.res.frames;
   if (a.i < frames.length - 1) {
-    a.t += dt;
+    // Slow motion for the last moments of a ball that's going in.
+    const slow = a.res.outcome === 'holed' && frames.length - 1 - a.i < 50 && frames.length > 70;
+    a.t += slow ? dt * 0.38 : dt;
     a.i = Math.min(frames.length - 1, Math.floor(a.t * 60));
     const f = frames[a.i];
     a.trail.push({ x: f.x, y: f.y, z: f.z });
@@ -1222,13 +1234,17 @@ function update(dt) {
   tickMeter();
   updatePreview();
   updateCamera(dt);
-  const wa = wind.dir + U.cam.rot;
+  if (use3D()) updateCamera3D(dt);
+  const wa = wind.dir + (use3D() && U.cam3 ? -Math.PI / 2 - Math.atan2(U.cam3.target[1] - U.cam3.eye[1], U.cam3.target[0] - U.cam3.eye[0]) : U.cam.rot);
   $('#windArrow').style.transform = `rotate(${(wa * 180) / Math.PI}deg)`;
 }
 
 function render(dt) {
+  R.stepParticles(dt);
   if (!G) return renderBackdrop(dt);
   if (!hole) return;
+  show3D(use3D());
+  if (use3D()) return render3D(dt);
   const scene = {
     view: view(),
     wind,
@@ -1487,7 +1503,208 @@ function renderBackdrop(dt) {
   const pin = hole.pin;
   U.cam.x += (pin.x + 0 - U.cam.x) * 0.002;
   U.cam.y += (pin.y + 60 - U.cam.y) * 0.002;
+  if (V3.ok && store.get('view3d', true)) {
+    // A slow helicopter orbit around the green.
+    if (V3.hole !== hole) V3.setHole(hole, R, R.palette);
+    show3D(true);
+    const a = U.time * 0.05 + 1;
+    const g = hole.green;
+    V3.draw({
+      cam: { eye: [g.x + Math.cos(a) * 125, g.y + Math.sin(a) * 125, 62], target: [g.x, g.y, 0] },
+      time: U.time, wind, balls: [], trails: [], particles: [], aim: null, flagColor: flagColor(),
+    });
+    R.clearOverlay();
+    return;
+  }
+  show3D(false);
   R.draw({ view: view(), wind, time: U.time, dt, balls: [], trails: [], aim: null, showSlope: false });
+}
+
+// ---------- the 3D view ----------
+
+function use3D() {
+  return V3.ok && store.get('view3d', true) && !U.mapView;
+}
+
+let shown3D = null;
+function show3D(on) {
+  if (shown3D === on) return;
+  shown3D = on;
+  $('#game3d').style.visibility = on ? 'visible' : 'hidden';
+}
+
+function flagColor() {
+  return hole && hole.course === 'standrews' ? [0.86, 0.15, 0.15, 1] : [1, 0.82, 0.25, 1];
+}
+
+const d2 = (a) => [Math.cos(a), Math.sin(a)];
+
+// The camera director: where the 3D camera wants to be right now.
+function camera3DTarget() {
+  const p = me();
+  const pl = G.players[p];
+  // Opening flyover: sweep down the hole toward the green.
+  if (U.phase === 'intro') {
+    const t = 1 - Math.max(0, U.introT) / U.introDur;
+    const P = hole.path, len = P[P.length - 1].s;
+    const at = (s) => {
+      let i = 1;
+      while (i < P.length - 1 && P[i].s < s) i++;
+      const a = P[i - 1], b = P[i], k = Math.max(0, Math.min(1, (s - a.s) / (b.s - a.s || 1)));
+      return [a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k];
+    };
+    const e = at(len * (-0.05 + t * 0.72));
+    const ease = t * t * (3 - 2 * t);
+    return { eye: [e[0], e[1], 46 - ease * 22], target: [hole.green.x, hole.green.y, 0], speed: 0 };
+  }
+  // A shot in the air: chase it, then cut to a camera by the landing spot.
+  const a = animFor(p) || (!G.simul ? U.anims[0] : null) || (pl.holed ? U.anims[0] : null);
+  if (a) return chaseCam(a);
+  if (U.dragging && U.dragging.cam3) return U.dragging.cam3;
+  const watch = pl.holed && G.simul ? G.players.findIndex((q) => !q.holed && q.h === G.h) : p;
+  const ball = G.players[watch >= 0 ? watch : p].ball;
+  const aiming = (U.phase === 'aim' || U.phase === 'pass') && watch === p;
+  const dir = aiming ? (U.dragging ? U.dragging.camDir : U.aim) : Math.atan2(hole.pin.y - ball.y, hole.pin.x - ball.x);
+  const [dx, dy] = d2(dir);
+  const dist = toPin(hole, ball);
+  const z = Math.max(0.55, Math.min(2.5, U.zoom));
+  let back, high, ahead;
+  if ((aiming && CLUBS[U.club].putter) || (!aiming && ball.lie === T.GREEN)) {
+    const k = Math.min(dist, 16);
+    back = 2.4 + k * 0.28; high = 1.4 + k * 0.24; ahead = Math.max(1.5, Math.min(dist, 16) * 0.7);
+  } else if ((aiming && isShortGame(ball)) || dist < 70) {
+    back = 7.5; high = 3; ahead = Math.min(aiming ? U.target : dist, 60) * 0.55;
+  } else {
+    back = 10; high = 3.6; ahead = 22;
+  }
+  back /= z; high /= z;
+  // Stand a little to the side, like a TV camera behind the player, so the
+  // flight arc reads as a curve rather than a straight line.
+  const side = back * 0.12;
+  return { eye: [ball.x - dx * back + dy * side, ball.y - dy * back - dx * side, high], target: [ball.x + dx * ahead, ball.y + dy * ahead, 0], speed: 3.2 };
+}
+
+function chaseCam(a) {
+  const fr = a.res.frames;
+  const f = fr[Math.min(a.i, fr.length - 1)];
+  const club = CLUBS[a.input.club];
+  const [dx, dy] = d2(a.input.aim);
+  if (club.putter) return { eye: [f.x - dx * 3, f.y - dy * 3, 1.15], target: [f.x + dx * 3, f.y + dy * 3, 0], speed: 4 };
+  if (a.landF == null) {
+    const land = a.res.events.find((e) => e.type === 'land' || e.type === 'tree');
+    a.landF = land ? land.f : fr.length - 1;
+    let apex = 0;
+    for (let i = 0; i < a.landF; i++) if (fr[i].z > fr[apex].z) apex = i;
+    a.apexF = apex;
+  }
+  const L = fr[a.landF];
+  const carry = Math.hypot(L.x - fr[0].x, L.y - fr[0].y);
+  // Broadcast style: for a long shot, cut to a camera beyond the landing area
+  // looking back as the ball drops in.
+  if (carry > 110 && a.i >= a.apexF + (a.landF - a.apexF) * 0.3) {
+    if (!a.cut) {
+      a.cut = true;
+      const side = (a.p + G.n) % 2 ? 1 : -1;
+      a.cutEye = [L.x + dx * 30 - dy * 10 * side, L.y + dy * 30 + dx * 10 * side, 6.5];
+      U.cam3 = { eye: a.cutEye.slice(), target: [f.x, f.y, f.z] };
+    }
+    return { eye: a.cutEye, target: [f.x, f.y, f.z * 0.8], speed: 6 };
+  }
+  return { eye: [f.x - dx * 15, f.y - dy * 15, 4 + f.z * 0.75], target: [f.x + dx * 20, f.y + dy * 20, f.z * 0.6], speed: 5 };
+}
+
+function updateCamera3D(dt) {
+  const want = camera3DTarget();
+  if (!U.cam3 || want.speed === 0) {
+    U.cam3 = { eye: want.eye.slice(), target: want.target.slice() };
+    return;
+  }
+  const k = 1 - Math.exp(-dt * want.speed);
+  for (const key of ['eye', 'target']) for (let i = 0; i < 3; i++) U.cam3[key][i] += (want[key][i] - U.cam3[key][i]) * k;
+}
+
+function render3D(dt) {
+  if (!U.cam3) updateCamera3D(0);
+  if (V3.hole !== hole) V3.setHole(hole, R, R.palette);
+  // Repaint a sharp patch of course around the ball the camera is behind.
+  const nb = currentBall();
+  const nearKey = `${hole.index}|${Math.round(nb.x)}|${Math.round(nb.y)}`;
+  if (U.nearKey !== nearKey && U.phase !== 'flight') {
+    U.nearKey = nearKey;
+    const box = { x: nb.x - 40, y: nb.y - 40, w: 80, h: 80 };
+    V3.setNear(R.paint(box, 9), box);
+  }
+  const multi = G.players.length > 1;
+  const panel = $('#panel');
+  const insetBottom = panel.hidden ? 0 : panel.getBoundingClientRect().height;
+  const scene = { cam: { ...U.cam3, insetTop: 62, insetBottom }, time: U.time, wind, balls: [], trails: [], particles: R.particles, aim: null, flagColor: flagColor() };
+  const labels = [];
+  G.players.forEach((p, i) => {
+    if (animFor(i) || p.holed || p.h !== G.h) return;
+    scene.balls.push({ x: p.ball.x, y: p.ball.y, z: 0, col: parseColor(COLORS[i]), ring: i === me() && U.phase === 'aim' });
+    if (multi) labels.push({ x: p.ball.x, y: p.ball.y, text: p.name.slice(0, 1).toUpperCase(), color: COLORS[i] });
+  });
+  for (const a of U.anims) {
+    const fr = a.res.frames;
+    const f = fr[a.i];
+    scene.balls.push({ x: f.x, y: f.y, z: f.z, col: parseColor(COLORS[a.p]) });
+    const t = [];
+    for (let i = 0; i <= a.i; i += 2) t.push([fr[i].x, fr[i].y, fr[i].z + 0.05]);
+    t.push([f.x, f.y, f.z + 0.05]);
+    scene.trails.push(t.slice(-160));
+  }
+  const ball = currentBall();
+  if (U.screen === 'play' && U.phase === 'aim' && U.preview) {
+    const pv = U.preview, fr = pv.frames;
+    const club = CLUBS[U.club];
+    const hazard = pv.tree || pv.outcome === 'water' || pv.outcome === 'ob';
+    const color = hazard ? [1, 0.55, 0.5, 0.95] : [1, 1, 1, 0.95];
+    if (club.putter) {
+      const last = Math.max(1, Math.round((fr.length - 1) * puttPreviewShare()));
+      const roll = [];
+      for (let i = 0; i <= last; i += 3) roll.push([fr[i].x, fr[i].y]);
+      scene.aim = { putt: true, roll, color };
+    } else {
+      const lf = Math.max(1, Math.min(pv.landF, fr.length - 1));
+      const arc = [];
+      for (let i = 0; i <= lf; i += 2) arc.push([fr[i].x, fr[i].y, fr[i].z + 0.06]);
+      arc.push([fr[lf].x, fr[lf].y, fr[lf].z + 0.06]);
+      const showRoll = store.get('difficulty', 'standard') !== 'pro' || isShortGame();
+      const roll = [];
+      if (showRoll) for (let i = lf; i < fr.length; i += 4) roll.push([fr[i].x, fr[i].y]);
+      scene.aim = {
+        arc, color,
+        roll: roll.length > 1 ? roll : null,
+        ring: { x: fr[lf].x, y: fr[lf].y, r: 1.1 },
+        end: showRoll && pv.outcome !== 'water' ? pv.end : null,
+      };
+      labels.push({ x: fr[lf].x, y: fr[lf].y, text: `${Math.round(U.target)}`, tag: true });
+    }
+  }
+  scene.slope = (ball.lie === T.GREEN || ball.lie === T.FRINGE || (U.phase === 'aim' && CLUBS[U.club].putter)) && toPin(hole, ball) < 30;
+  drawSide();
+  V3.draw(scene);
+  // 2D overlay: labels, popups.
+  R.clearOverlay();
+  const ctx = R.ctx;
+  ctx.setTransform(R.dpr, 0, 0, R.dpr, 0, 0);
+  for (const l of labels) {
+    const p = V3.project(l.x, l.y, l.tag ? 0 : 0.3);
+    if (!p) continue;
+    ctx.font = '800 13px "Nunito", ui-rounded, system-ui, sans-serif';
+    const w = ctx.measureText(l.text).width + 12;
+    const x = l.tag ? p[0] + 16 : p[0] - w / 2, y = l.tag ? p[1] - 10 : p[1] - 34;
+    ctx.fillStyle = l.tag ? 'rgba(10,30,16,0.75)' : l.color;
+    ctx.beginPath();
+    ctx.roundRect ? ctx.roundRect(x, y, w, 20, 10) : ctx.rect(x, y, w, 20);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(l.text, x + 6, y + 10.5);
+  }
+  drawPopups(dt);
+  drawMeter();
 }
 
 // ---------- online ----------
@@ -2004,9 +2221,16 @@ canvas.addEventListener('pointerdown', (e) => {
     U.pinch = { d: pinchDist(), z: U.zoom };
     return;
   }
+  // Tap during the flyover to skip it.
+  if (U.screen === 'play' && U.phase === 'intro' && U.introT > 0.6) {
+    U.introT = 0.01;
+    return;
+  }
   if (U.screen !== 'play' || U.phase !== 'aim' || U.swing.phase !== 'idle' || U.mapView) return;
   const b0 = currentBall();
-  U.dragging = { id: e.pointerId, camDir: U.aim, span: aimSpan(b0, toPin(hole, b0)) };
+  U.dragging = { id: e.pointerId, camDir: U.aim, span: aimSpan(b0, toPin(hole, b0)), cam3: null };
+  // Hold the 3D camera still while dragging, so the course stays under the finger.
+  if (use3D()) U.dragging.cam3 = { ...camera3DTarget(), speed: 3.2 };
   aimAt(e.clientX, e.clientY);
 });
 canvas.addEventListener('pointermove', (e) => {
@@ -2033,7 +2257,7 @@ canvas.addEventListener('wheel', (e) => {
 }, { passive: false });
 
 function aimAt(sx, sy) {
-  const [wx, wy] = R.toWorld(sx, sy);
+  const [wx, wy] = use3D() ? V3.toWorld(sx, sy) : R.toWorld(sx, sy);
   const b = currentBall();
   const d = Math.hypot(wx - b.x, wy - b.y);
   if (d < 0.5) return;
@@ -2154,6 +2378,17 @@ $('#sideBtn').addEventListener('click', () => {
   U.sidePinned = !U.sidePinned;
   sound.click();
 });
+$('#viewBtn').addEventListener('click', () => {
+  store.set('view3d', !store.get('view3d', true));
+  U.cam3 = null;
+  sound.click();
+  refreshViewBtn();
+});
+function refreshViewBtn() {
+  $('#viewBtn').hidden = !V3.ok;
+  $('#viewBtn').textContent = store.get('view3d', true) ? '2D' : '3D';
+}
+refreshViewBtn();
 $('#mapBtn').addEventListener('click', () => {
   U.mapView = !U.mapView;
   $('#mapBtn').classList.toggle('on', U.mapView);
@@ -2363,7 +2598,9 @@ if ('serviceWorker' in navigator && window.top === window.self && location.proto
 window.__pl = {
   get G() { return G; }, get U() { return U; }, get hole() { return hole; }, showFinal, showCard, refreshPhase,
   club: () => CLUBS[U.club],
+  V3,
   targetMeter: () => targetPower() / meterScale(),
+  shoot: () => takeShot(targetPower(), 0),
   setBall: (x, y, lie) => { G.players[me()].ball = { x, y, lie }; U.aimFor = ''; refreshPhase(); },
 };
 

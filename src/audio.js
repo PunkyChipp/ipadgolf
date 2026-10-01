@@ -145,6 +145,11 @@ export class Sound {
     if (level >= 2) this.noise({ dur: 1.2, vol: 0.06, freq: 900, q: 0.4, at: 0.4, attack: 0.3 });
   }
 
+  // The swing through the air: a quick rising rush, louder for big swings.
+  whoosh(power = 1) {
+    this.noise({ dur: 0.22, vol: 0.05 + Math.min(1, power) * 0.07, freq: 500, freq2: 2600, q: 0.8, attack: 0.12 });
+  }
+
   // A gallery roar that swells and fades: bigger for better shots.
   roar(level = 1) {
     if (!this.ready) return;

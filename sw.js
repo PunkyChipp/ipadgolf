@@ -1,17 +1,18 @@
 // Network-first cache so the game still opens offline once it has been played,
 // while updates show up as soon as there is a connection.
-const CACHE = 'pocket-links-v8';
+const CACHE = 'pocket-links-v9';
 const ASSETS = [
   './',
   'index.html',
-  'styles.css?v=8',
+  'styles.css?v=9',
   'manifest.webmanifest',
-  'src/game.js?v=8',
-  'src/course.js?v=8',
-  'src/sim.js?v=8',
-  'src/render.js?v=8',
-  'src/net.js?v=8',
-  'src/audio.js?v=8',
+  'src/game.js?v=9',
+  'src/course.js?v=9',
+  'src/sim.js?v=9',
+  'src/render.js?v=9',
+  'src/net.js?v=9',
+  'src/audio.js?v=9',
+  'src/view3d.js?v=9',
   'src/vendor/mqtt.min.js',
   'icons/icon.svg',
   'icons/apple-touch-icon.png',
