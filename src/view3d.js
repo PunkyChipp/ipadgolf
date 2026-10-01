@@ -12,7 +12,7 @@
 
 const TAU = Math.PI * 2;
 const EDGE = 6; // terrain height at the edge of the course area
-const STEP = 2; // terrain grid spacing, yards
+const STEP = 1; // terrain grid spacing, yards
 import { paintAtlas, makeTrees, makeTreeMaterials, makeGrassGeo, makeGrassMaterial } from './flora.js?v=12';
 const VERSIONED = new URL(import.meta.url).search; // same ?v= as this file
 
@@ -22,31 +22,31 @@ const LOOKS = {
     skyTop: '#3d8fe0', skyHorizon: '#cfe7f7', sun: '#fff1d6', sunI: 2.6, hemiSky: '#cfe6ff', hemiGround: '#5a7d3a', hemiI: 1.3, exposure: 1.0,
     ob: '#4f9a3f', deep: '#5aa646', rough: '#66b34c', fairway: '#86cf5c', fairway2: '#79c352', fringe: '#7fcb59', green: '#97de6c', green2: '#8bd462',
     sand: '#f3e2b2', sandLip: '#c9b07a', bed: '#2f6f80', water: '#2fa3c4', deepWater: '#1a6c8f', tree: ['#3f8f3a', '#4ea544', '#2f7a3a'], trunk: '#7a5634',
-    hills: ['#5aa04d', '#6fb35a', '#4f8f48'], sunEl: 0.85, cloud: 1, fogNear: 260, fogFar: 1700, hillsH: 1,
+    hills: ['#5aa04d', '#6fb35a', '#4f8f48'], sunEl: 0.85, cloud: 1, fogNear: 260, fogFar: 1700, hillsH: 1, env: 'park',
   },
   augusta: {
     skyTop: '#2f84df', skyHorizon: '#d6ecf8', sun: '#fff3dd', sunI: 2.7, hemiSky: '#d2e8ff', hemiGround: '#4c7a37', hemiI: 1.25, exposure: 1.0,
     ob: '#3f8a3a', deep: '#4c9a40', rough: '#5aa847', fairway: '#7ccb58', fairway2: '#6dbd4f', fringe: '#79c656', green: '#93dd69', green2: '#85d25e',
     sand: '#fbf6ea', sandLip: '#d2c8b0', bed: '#2a5f63', water: '#2a9fb8', deepWater: '#176a86', tree: ['#2e7a3c', '#3c8f46', '#256a36'], trunk: '#8a5a3a',
-    hills: ['#3f8a45', '#56a04f', '#357a40'], sunEl: 0.9, cloud: 0.8, fogNear: 260, fogFar: 1700, hillsH: 1.2, straw: '#c79b62', flowers: true,
+    hills: ['#3f8a45', '#56a04f', '#357a40'], sunEl: 0.9, cloud: 0.8, fogNear: 260, fogFar: 1700, hillsH: 1.2, straw: '#c79b62', flowers: true, env: 'park',
   },
   standrews: {
-    skyTop: '#7f97ae', skyHorizon: '#dfe5e9', sun: '#f4efe6', sunI: 1.7, hemiSky: '#e4ecf2', hemiGround: '#8c8f55', hemiI: 1.6, exposure: 1.05,
+    skyTop: '#6f8aa6', skyHorizon: '#d3dbe1', sun: '#f6efe2', sunI: 2.1, hemiSky: '#e4ecf2', hemiGround: '#8c8f55', hemiI: 1.4, exposure: 0.95,
     ob: '#9aa25a', deep: '#a3a660', rough: '#b0b56a', fairway: '#8fcf63', fairway2: '#84c35a', fringe: '#88c85e', green: '#98d86c', green2: '#8ccd63',
     sand: '#ead8a6', sandLip: '#8d7a4c', bed: '#3a6a76', water: '#3b8fa6', deepWater: '#245f74', tree: ['#3b6f35', '#4a7f3a', '#355f2f'], trunk: '#6a5233',
-    hills: ['#93a05a', '#a6ad66', '#7f8f50'], sunEl: 0.95, cloud: 2.2, fogNear: 200, fogFar: 1400, hillsH: 0.4, gorse: true,
+    hills: ['#93a05a', '#a6ad66', '#7f8f50'], sunEl: 0.95, cloud: 2.2, fogNear: 320, fogFar: 1600, hillsH: 0.4, gorse: true, env: 'sky', envI: 0.7,
   },
   pebble: {
     skyTop: '#4a74c9', skyHorizon: '#ffd7a8', sun: '#ffd29a', sunI: 2.5, hemiSky: '#ffd9b8', hemiGround: '#4f7a3f', hemiI: 1.15, exposure: 1.0,
     ob: '#4f9440', deep: '#5aa046', rough: '#64ac4c', fairway: '#82cd5c', fairway2: '#74bf52', fringe: '#7cc858', green: '#94dc6a', green2: '#87d160',
     sand: '#f2e1b5', sandLip: '#b9a072', bed: '#1d4f73', water: '#2f8fc8', deepWater: '#1a5c94', tree: ['#2b5f3f', '#336b45', '#285738'], trunk: '#6b5040',
-    hills: ['#4f8f45', '#5f9f50', '#477f40'], sunEl: 0.42, cloud: 1.1, fogNear: 260, fogFar: 1700, hillsH: 0.8, rock: '#a69a86',
+    hills: ['#4f8f45', '#5f9f50', '#477f40'], sunEl: 0.42, cloud: 1.1, fogNear: 260, fogFar: 1700, hillsH: 0.8, rock: '#a69a86', env: 'sunset',
   },
   sawgrass: {
     skyTop: '#2b8ff0', skyHorizon: '#cdeeff', sun: '#fff6e2', sunI: 2.8, hemiSky: '#d6efff', hemiGround: '#5a8a3c', hemiI: 1.25, exposure: 1.0,
     ob: '#4c9a3e', deep: '#57a644', rough: '#62b14b', fairway: '#82d35d', fairway2: '#73c552', fringe: '#7ccc57', green: '#95e06b', green2: '#88d562',
     sand: '#f6ead0', sandLip: '#cbb88f', bed: '#285f6c', water: '#2aa8c0', deepWater: '#167089', tree: ['#3e9642', '#4aa64b', '#33843b'], trunk: '#8a6e4c',
-    hills: ['#4f9a48', '#62ad55', '#468a43'], sunEl: 0.95, cloud: 1.2, fogNear: 260, fogFar: 1700, hillsH: 0.5,
+    hills: ['#4f9a48', '#62ad55', '#468a43'], sunEl: 0.95, cloud: 1.2, fogNear: 260, fogFar: 1700, hillsH: 0.5, env: 'park',
   },
 };
 
@@ -195,6 +195,17 @@ function paintTurf(hole, box, px, L) {
   c.fillStyle = L.fairway2;
   for (let i = -t.ry; i < t.ry; i += 3) c.fillRect(-t.rx, i, t.rx * 2, 1.5);
   c.restore();
+  // Soft shade under every tree, so they sit in the ground even beyond the
+  // reach of the sun's shadow map.
+  for (const t of hole.trees) {
+    const rr = t.r * 1.5;
+    const sh = c.createRadialGradient(t.x, t.y, 0, t.x, t.y, rr);
+    sh.addColorStop(0, 'rgba(10,30,5,0.42)');
+    sh.addColorStop(0.55, 'rgba(10,30,5,0.22)');
+    sh.addColorStop(1, 'rgba(10,30,5,0)');
+    c.fillStyle = sh;
+    c.fillRect(t.x - rr, t.y - rr, rr * 2, rr * 2);
+  }
   // Water beds and sea cliffs (the water surface is drawn separately).
   for (const w of hole.water) {
     if (w.line) {
@@ -265,6 +276,107 @@ function paintTurf(hole, box, px, L) {
   return cv;
 }
 
+// ---------- crisp course edges ----------
+// Signed distances (yards, negative inside) to each kind of surface, at two
+// texels per yard. Sampled with bilinear filtering they give razor-sharp,
+// smooth edges at any zoom, which a painted texture can't.
+const SDF_PX = 2;
+const SDF_MAX = 16;
+
+function ellipseSD(e, x, y, grow = 0) {
+  const c = Math.cos(-(e.rot || 0)), sn = Math.sin(-(e.rot || 0));
+  const dx = x - e.x, dy = y - e.y;
+  const u = dx * c - dy * sn, v = dx * sn + dy * c;
+  const rx = e.rx + grow, ry = e.ry + grow;
+  const k = Math.sqrt((u * u) / (rx * rx) + (v * v) / (ry * ry));
+  if (k < 0.05) return -Math.min(rx, ry);
+  const gx = u / (rx * rx), gy = v / (ry * ry);
+  return ((k - 1) * k) / Math.hypot(gx, gy);
+}
+
+function segSD(x, y, ax, ay, bx, by) {
+  const abx = bx - ax, aby = by - ay, l2 = abx * abx + aby * aby || 1;
+  const t = Math.max(0, Math.min(1, ((x - ax) * abx + (y - ay) * aby) / l2));
+  return Math.hypot(x - ax - abx * t, y - ay - aby * t);
+}
+
+// Float to IEEE half (no NaN/denormal care needed for these ranges).
+const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
+function toHalf(v) {
+  f32[0] = v;
+  const x = u32[0];
+  const sign = (x >>> 16) & 0x8000;
+  const e = ((x >>> 23) & 0xff) - 112;
+  if (e <= 0) return sign;
+  if (e >= 31) return sign | 0x7c00;
+  return sign | (e << 10) | ((x >>> 13) & 0x3ff);
+}
+
+function buildCourseSDF(hole, box) {
+  const W = Math.ceil(box.w * SDF_PX), H = Math.ceil(box.h * SDF_PX);
+  const n = W * H;
+  const F = new Float32Array(n).fill(SDF_MAX), Gd = new Float32Array(n).fill(SDF_MAX);
+  const S = new Float32Array(n).fill(SDF_MAX), Wd = new Float32Array(n).fill(SDF_MAX);
+  const along = new Float32Array(n);
+  const X = (i) => box.x + (i + 0.5) / SDF_PX, Y = (j) => box.y + (j + 0.5) / SDF_PX;
+  // Run f over the texels inside a bounding box (world units).
+  const each = (x0, y0, x1, y1, f) => {
+    const i0 = Math.max(0, Math.floor((x0 - box.x) * SDF_PX)), i1 = Math.min(W - 1, Math.ceil((x1 - box.x) * SDF_PX));
+    const j0 = Math.max(0, Math.floor((y0 - box.y) * SDF_PX)), j1 = Math.min(H - 1, Math.ceil((y1 - box.y) * SDF_PX));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) f(j * W + i, X(i), Y(j));
+  };
+  const ellBox = (e, m) => {
+    const r = Math.max(e.rx, e.ry) + m;
+    return [e.x - r, e.y - r, e.x + r, e.y + r];
+  };
+  // Fairway: distance to the centre line minus the (varying) half width,
+  // splatted segment by segment into the texels each one can affect.
+  if (hole.fwFrom < hole.fwTo) {
+    const P = hole.path;
+    for (let q = 0; q < P.length - 1; q++) {
+      const A = P[q], B = P[q + 1];
+      if (B.s < hole.fwFrom || A.s > hole.fwTo) continue;
+      const hwA = hole.halfWidth(Math.max(hole.fwFrom, A.s)), hwB = hole.halfWidth(Math.min(hole.fwTo, B.s));
+      const reach = Math.max(hwA, hwB) + SDF_MAX;
+      const abx = B.x - A.x, aby = B.y - A.y, l2 = abx * abx + aby * aby || 1;
+      const s0 = Math.max(hole.fwFrom, A.s), s1 = Math.min(hole.fwTo, B.s);
+      const t0 = (s0 - A.s) / (B.s - A.s || 1), t1 = (s1 - A.s) / (B.s - A.s || 1);
+      each(Math.min(A.x, B.x) - reach, Math.min(A.y, B.y) - reach, Math.max(A.x, B.x) + reach, Math.max(A.y, B.y) + reach, (k, x, y) => {
+        const t = Math.max(t0, Math.min(t1, ((x - A.x) * abx + (y - A.y) * aby) / l2));
+        const d = Math.hypot(x - A.x - abx * t, y - A.y - aby * t) - (hwA + (hwB - hwA) * t);
+        if (d < F[k]) {
+          F[k] = Math.max(-SDF_MAX, d);
+          along[k] = A.s + (B.s - A.s) * t;
+        }
+      });
+    }
+  }
+  const g = hole.green;
+  each(...ellBox(g, SDF_MAX), (k, x, y) => {
+    Gd[k] = Math.max(-SDF_MAX, Math.min(Gd[k], ellipseSD(g, x, y)));
+  });
+  for (const b of hole.bunkers) {
+    each(...ellBox(b, 6), (k, x, y) => {
+      S[k] = Math.max(-SDF_MAX, Math.min(S[k], ellipseSD(b, x, y)));
+    });
+  }
+  for (const w of hole.water) {
+    if (w.line) {
+      const xs = w.line.map((p) => p[0]), ys = w.line.map((p) => p[1]);
+      each(Math.min(...xs) - w.w - 6, Math.min(...ys) - w.w - 6, Math.max(...xs) + w.w + 6, Math.max(...ys) + w.w + 6, (k, x, y) => {
+        let d = Infinity;
+        for (let q = 1; q < w.line.length; q++) d = Math.min(d, segSD(x, y, w.line[q - 1][0], w.line[q - 1][1], w.line[q][0], w.line[q][1]));
+        Wd[k] = Math.max(-SDF_MAX, Math.min(Wd[k], d - w.w / 2));
+      });
+    } else {
+      each(...ellBox(w, 6), (k, x, y) => {
+        Wd[k] = Math.max(-SDF_MAX, Math.min(Wd[k], ellipseSD(w, x, y)));
+      });
+    }
+  }
+  return { W, H, F, G: Gd, S, Wd, along };
+}
+
 // ---------- the view ----------
 
 export class View3D {
@@ -292,6 +404,7 @@ export class View3D {
     this.scene = new T.Scene();
     this.camera = new T.PerspectiveCamera(56, 1, 0.15, 6000);
     this.camera.up.set(0, 0, 1);
+    this.camera.layers.enable(1);
 
     // Lights: sun with soft shadows, plus sky light.
     this.hemi = new T.HemisphereLight(0xffffff, 0x446622, 1.2);
@@ -326,12 +439,37 @@ export class View3D {
           c.rgb *= v;
           // A little extra richness in the mid-tones.
           float l = dot(c.rgb, vec3(0.299, 0.587, 0.114));
-          c.rgb = mix(vec3(l), c.rgb, 1.08);
+          c.rgb = mix(vec3(l), c.rgb, 1.14);
+          // A gentle contrast curve around mid-grey (in linear light).
+          c.rgb = max(c.rgb, 0.0);
+          c.rgb = c.rgb * (1.0 + 0.12 * (c.rgb - 0.18) / (c.rgb + 0.18));
           gl_FragColor = c;
         }`,
     });
     this.composer.addPass(this.vignette);
     this.composer.addPass(new T.OutputPass());
+    // Contrast-adaptive sharpening (after tone mapping) for a crisp image.
+    this.sharpen = new T.ShaderPass({
+      uniforms: { tDiffuse: { value: null }, uTexel: { value: new T.Vector2(1, 1) }, uAmount: { value: 0.55 } },
+      vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `uniform sampler2D tDiffuse; uniform vec2 uTexel; uniform float uAmount; varying vec2 vUv;
+        void main() {
+          vec3 c = texture2D(tDiffuse, vUv).rgb;
+          vec3 n = texture2D(tDiffuse, vUv + vec2(0.0, uTexel.y)).rgb;
+          vec3 s = texture2D(tDiffuse, vUv - vec2(0.0, uTexel.y)).rgb;
+          vec3 e = texture2D(tDiffuse, vUv + vec2(uTexel.x, 0.0)).rgb;
+          vec3 w = texture2D(tDiffuse, vUv - vec2(uTexel.x, 0.0)).rgb;
+          vec3 mn = min(c, min(min(n, s), min(e, w))), mx = max(c, max(max(n, s), max(e, w)));
+          vec3 amp = sqrt(clamp(min(mn, 1.0 - mx) / max(mx, 1e-4), 0.0, 1.0));
+          vec3 wgt = -amp * uAmount * 0.2;
+          gl_FragColor = vec4(clamp((c + (n + s + e + w) * wgt) / (1.0 + 4.0 * wgt), 0.0, 1.0), 1.0);
+        }`,
+    });
+    this.composer.addPass(this.sharpen);
+    // Image-based light from real sky HDRIs (assets/env, CC0 Poly Haven).
+    this.pmrem = new T.PMREMGenerator(renderer);
+    this.envCache = {};
+    this.scene.environmentRotation.set(Math.PI / 2, 0, 0); // the HDRIs are y-up, the course is z-up
 
     // Quality: 2 = everything, 1 = no bloom/MSAA, 0 = plain render at lower
     // resolution without grass tufts. Software GL starts low; real GPUs start
@@ -356,7 +494,7 @@ export class View3D {
     this.h = h;
     this.dpr = dpr;
     if (!this.renderer) return;
-    const pr = Math.min(dpr, [1, 1.35, 1.75][this.quality]);
+    const pr = Math.min(dpr, [1, 1.5, 2][this.quality]);
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w, h, false);
     this.cv.style.width = w + 'px';
@@ -364,12 +502,63 @@ export class View3D {
     this.composer.setPixelRatio(pr);
     this.composer.setSize(w, h);
     this.bloom.setSize(Math.round((w * pr) / 2), Math.round((h * pr) / 2));
+    this.sharpen.uniforms.uTexel.value.set(1 / (w * pr), 1 / (h * pr));
+  }
+
+  // Tiling detail textures for the ground (assets/tex, made by
+  // tools/gen_textures.py). Neutral stand-ins are used until they arrive.
+  loadDetail() {
+    const T = this.T;
+    const one = (r, g, b) => {
+      const t = new T.DataTexture(new Uint8Array([r, g, b, 255]), 1, 1);
+      t.needsUpdate = true;
+      return t;
+    };
+    const grey = one(128, 128, 128), flat = one(128, 128, 255);
+    const files = {
+      uDFairA: 'grass_fairway', uDFairN: 'grass_fairway_n', uDGreenA: 'grass_green', uDGreenN: 'grass_green_n',
+      uDRoughA: 'grass_rough', uDRoughN: 'grass_rough_n', uDSandA: 'sand', uDSandN: 'sand_n',
+      uDSoilA: 'soil', uDSoilN: 'soil_n', uDMacro: 'macro',
+    };
+    this.detU = { uDetOn: { value: 0 } };
+    // The painted cloud band for the sky (transparent until it loads).
+    const clear = new T.DataTexture(new Uint8Array([255, 255, 255, 0]), 1, 1);
+    clear.needsUpdate = true;
+    this.cloudsU = { value: clear };
+    new T.TextureLoader().load(new URL('../assets/tex/clouds.png', import.meta.url).href + VERSIONED, (t) => {
+      t.wrapS = T.RepeatWrapping;
+      t.colorSpace = T.SRGBColorSpace;
+      t.anisotropy = 4;
+      this.cloudsU.value = t;
+    });
+    for (const [u, f] of Object.entries(files)) this.detU[u] = { value: f.endsWith('_n') ? flat : grey };
+    const loader = new T.TextureLoader();
+    const aniso = this.renderer.capabilities.getMaxAnisotropy();
+    const load = (f) =>
+      new Promise((ok, fail) =>
+        loader.load(new URL(`../assets/tex/${f}.webp`, import.meta.url).href + VERSIONED, ok, undefined, fail));
+    Promise.all(
+      Object.entries(files).map(([u, f]) =>
+        load(f).then((t) => {
+          t.wrapS = t.wrapT = T.RepeatWrapping;
+          t.colorSpace = T.NoColorSpace; // detail is centred on 0.5 in linear terms
+          t.anisotropy = Math.min(16, aniso);
+          return [u, t];
+        }),
+      ),
+    )
+      .then((list) => {
+        for (const [u, t] of list) this.detU[u].value = t;
+        this.detU.uDetOn.value = 1;
+      })
+      .catch(() => {}); // keep the plain look if they can't load
   }
 
   // Pieces that don't depend on the hole: geometries, materials, pools.
   buildShared() {
     const T = this.T;
     this.timeU = { value: 0 };
+    this.loadDetail();
     // Trees, bushes and grass (see flora.js).
     {
       // Upload the atlas as raw pixels, with leaf colour bled into the clear
@@ -400,6 +589,22 @@ export class View3D {
     const mats = makeTreeMaterials(T, this.atlasTex, this.timeU);
     this.leafMat = mats.leaf;
     this.barkMat = mats.bark;
+    // Swap in the painted foliage atlas and bark when they arrive.
+    const tl = new T.TextureLoader();
+    tl.load(new URL('../assets/tex/foliage.png', import.meta.url).href + VERSIONED, (t) => {
+      t.colorSpace = T.SRGBColorSpace;
+      t.anisotropy = 4;
+      this.leafMat.map = t;
+      this.leafMat.needsUpdate = true;
+    });
+    tl.load(new URL('../assets/tex/bark.webp', import.meta.url).href + VERSIONED, (t) => {
+      t.colorSpace = T.SRGBColorSpace;
+      t.wrapS = t.wrapT = T.RepeatWrapping;
+      t.anisotropy = 4;
+      this.barkMat.map = t;
+      this.barkMat.color.setScalar(1.35);
+      this.barkMat.needsUpdate = true;
+    });
     this.grassU = {
       uTime: this.timeU, uMask: { value: null }, uHeight: { value: null }, uTurf: { value: null },
       uBox: { value: new T.Vector4() }, uGrid: { value: new T.Vector4() }, uCentre: { value: new T.Vector2() },
@@ -417,6 +622,7 @@ export class View3D {
       ig.instanceCount = N * N;
       this.grass = new T.Mesh(ig, makeGrassMaterial(T, this.grassU));
       this.grass.frustumCulled = false;
+      this.grass.layers.set(1); // kept out of the water's reflection pass
       this.grass.receiveShadow = true;
       this.grass.visible = false;
       this.scene.add(this.grass);
@@ -469,6 +675,7 @@ export class View3D {
   setHole(hole, R) {
     if (!this.ok) return;
     const T = this.T;
+    const t0 = performance.now();
     if (this.holeGroup) {
       this.scene.remove(this.holeGroup);
       this.holeGroup.traverse((o) => {
@@ -476,6 +683,8 @@ export class View3D {
         if (o.material && o.userData.ownMat) o.material.dispose();
       });
       for (const t of this.holeTextures || []) t.dispose();
+      if (this.reflector) this.reflector.dispose();
+      this.reflector = null;
     }
     this.hole = hole;
     this.box = R.box;
@@ -496,6 +705,7 @@ export class View3D {
     this.hemi.intensity = L.hemiI;
     this.renderer.toneMappingExposure = L.exposure;
     this.scene.fog = new T.Fog(new T.Color(L.skyHorizon), L.fogNear, L.fogFar);
+    this.useEnv(L.env || 'park', L);
 
     // Terrain.
     const mask = R.paintMask(R.box, 1);
@@ -516,20 +726,22 @@ export class View3D {
     this.buildPin(hole, L, group);
     // Dynamic pieces.
     this.buildDynamic(group);
+    this.buildMs = Math.round(performance.now() - t0);
   }
 
   buildTerrain(hole, mask, L, group) {
     const T = this.T;
     const box = this.box;
+    const sd = buildCourseSDF(hole, box);
+    const sdAt = (a, x, y) => {
+      const fx = (x - box.x) * SDF_PX - 0.5, fy = (y - box.y) * SDF_PX - 0.5;
+      const i = Math.max(0, Math.min(sd.W - 2, Math.floor(fx))), j = Math.max(0, Math.min(sd.H - 2, Math.floor(fy)));
+      const u = Math.max(0, Math.min(1, fx - i)), v = Math.max(0, Math.min(1, fy - j)), k = j * sd.W + i;
+      return (a[k] * (1 - u) + a[k + 1] * u) * (1 - v) + (a[k + sd.W] * (1 - u) + a[k + sd.W + 1] * u) * v;
+    };
     const step = STEP;
     const gw = Math.ceil(box.w / step) + 1, gh = Math.ceil(box.h / step) + 1;
     const img = mask.getContext('2d').getImageData(0, 0, mask.width, mask.height).data;
-    const at = (x, y) => {
-      const px = Math.max(0, Math.min(mask.width - 1, Math.floor(x - box.x)));
-      const py = Math.max(0, Math.min(mask.height - 1, Math.floor(y - box.y)));
-      const o = (py * mask.width + px) * 4;
-      return [img[o], img[o + 1], img[o + 2]];
-    };
     const N = gw * gh;
     const play = new Float32Array(N), base = new Float32Array(N);
     const noise = makeNoise(hole.index * 97 + 3);
@@ -537,39 +749,37 @@ export class View3D {
     for (let j = 0; j < gh; j++) {
       for (let i = 0; i < gw; i++) {
         const x = box.x + i * step, y = box.y + j * step;
-        const [Rr, G, B] = at(x, y);
+        const o = (Math.max(0, Math.min(mask.height - 1, Math.floor(y - box.y))) * mask.width + Math.max(0, Math.min(mask.width - 1, Math.floor(x - box.x)))) * 4;
+        const Rr = img[o], G = img[o + 1], B = img[o + 2];
         const k = j * gw + i;
         play[k] = Rr > 30 || G > 128 || B > 128 ? 1 : 0;
         let h = 0;
-        if (Rr > 200) h = -0.55;
+        if (Rr > 200) h = -0.2;
         else if (B > 128) h = sea ? -3.5 : -1.2;
         else if (G < 128 && Rr > 30) h = (noise(x / 9, y / 9) - 0.5) * 0.6;
         base[k] = h;
       }
     }
-    const blur = (a, passes) => {
+    // Gaussian-ish blur: three passes of a separable running-sum box blur
+    // with radius r grid cells (clamped at the edges).
+    const blur = (a, r) => {
+      if (r < 1) return;
       const t = new Float32Array(N);
-      for (let p = 0; p < passes; p++) {
-        for (let j = 0; j < gh; j++) {
-          for (let i = 0; i < gw; i++) {
-            let s = 0, n = 0;
-            for (let dj = -1; dj <= 1; dj++) {
-              const jj = j + dj;
-              if (jj < 0 || jj >= gh) continue;
-              for (let di = -1; di <= 1; di++) {
-                const ii = i + di;
-                if (ii < 0 || ii >= gw) continue;
-                s += a[jj * gw + ii];
-                n++;
-              }
-            }
-            t[j * gw + i] = s / n;
-          }
+      const line = (src, dst, n, stride, base) => {
+        let acc = 0;
+        const at = (q) => src[base + Math.max(0, Math.min(n - 1, q)) * stride];
+        for (let q = -r; q <= r; q++) acc += at(q);
+        for (let q = 0; q < n; q++) {
+          dst[base + q * stride] = acc / (2 * r + 1);
+          acc += at(q + r + 1) - at(q - r);
         }
-        a.set(t);
+      };
+      for (let pass = 0; pass < 3; pass++) {
+        for (let j = 0; j < gh; j++) line(a, t, gw, 1, j * gw);
+        for (let i = 0; i < gw; i++) line(t, a, gh, gw, i);
       }
     };
-    blur(play, 12);
+    blur(play, Math.round(4 / step));
     const H = new Float32Array(N);
     const t = hole.tee;
     for (let j = 0; j < gh; j++) {
@@ -586,7 +796,19 @@ export class View3D {
         H[k] = h;
       }
     }
-    blur(H, 2);
+    blur(H, Math.max(1, Math.round(1.5 / step)));
+    // Bunkers: a proper bowl with a steep face and a grassy lip.
+    for (let j = 0; j < gh; j++) {
+      for (let i = 0; i < gw; i++) {
+        const x = box.x + i * step, y = box.y + j * step;
+        const d = sdAt(sd.S, x, y);
+        if (d > 2) continue;
+        const k = j * gw + i;
+        const bowl = -0.75 * Math.pow(Math.min(1, Math.max(0, -d) / 2.2), 0.6);
+        const lip = d > 0 ? 0.16 * (1 - d / 2) : 0.16 * Math.max(0, 1 + d / 0.35);
+        H[k] = H[k] * (d > 0 ? 1 : 0.3) + bowl + lip;
+      }
+    }
     // The green's real contours (the same ones the putts roll on), a touch
     // exaggerated so the breaks read, easing out into the surrounds.
     const g = hole.green, sl = hole.slope;
@@ -643,7 +865,20 @@ export class View3D {
     geo.setAttribute('position', new T.BufferAttribute(pos, 3));
     geo.setAttribute('uv', new T.BufferAttribute(uv, 2));
     geo.setIndex(new T.BufferAttribute(idx, 1));
-    geo.computeVertexNormals();
+    // Normals straight from the height grid (central differences).
+    const nrm = new Float32Array(N * 3);
+    for (let j = 0; j < gh; j++) {
+      for (let i = 0; i < gw; i++) {
+        const k = j * gw + i;
+        const hx = H[j * gw + Math.min(gw - 1, i + 1)] - H[j * gw + Math.max(0, i - 1)];
+        const hy = H[Math.min(gh - 1, j + 1) * gw + i] - H[Math.max(0, j - 1) * gw + i];
+        const nx = -hx / (2 * step), ny = -hy / (2 * step), l = Math.hypot(nx, ny, 1);
+        nrm[k * 3] = nx / l;
+        nrm[k * 3 + 1] = ny / l;
+        nrm[k * 3 + 2] = 1 / l;
+      }
+    }
+    geo.setAttribute('normal', new T.BufferAttribute(nrm, 3));
 
     const maxTex = Math.min(this.renderer.capabilities.maxTextureSize, 4096);
     const px = Math.min(4, maxTex / Math.max(box.w, box.h));
@@ -654,30 +889,136 @@ export class View3D {
     turf.generateMipmaps = true;
     turf.minFilter = T.LinearMipmapLinearFilter;
     this.holeTextures.push(turf);
-    const mat = new T.MeshStandardMaterial({ map: turf, roughness: 0.95, metalness: 0 });
-    // Fine grass grain and blade texture close to the camera.
+    // Crisp surfaces from signed distances (see buildCourseSDF).
+    const half = new Uint16Array(sd.W * sd.H * 4), halfS = new Uint16Array(sd.W * sd.H);
+    for (let k = 0; k < sd.W * sd.H; k++) {
+      half[k * 4] = toHalf(sd.F[k]);
+      half[k * 4 + 1] = toHalf(sd.G[k]);
+      half[k * 4 + 2] = toHalf(sd.S[k]);
+      half[k * 4 + 3] = toHalf(sd.Wd[k]);
+      halfS[k] = toHalf(sd.along[k]);
+    }
+    const sdfTex = new T.DataTexture(half, sd.W, sd.H, T.RGBAFormat, T.HalfFloatType);
+    const alongTex = new T.DataTexture(halfS, sd.W, sd.H, T.RedFormat, T.HalfFloatType);
+    for (const t of [sdfTex, alongTex]) {
+      t.minFilter = t.magFilter = T.LinearFilter;
+      t.needsUpdate = true;
+      this.holeTextures.push(t);
+    }
+    this.sdf = sd;
+    const tee = hole.tee, gr = hole.green;
+    const col = (c) => new T.Color(c);
+    const mat = new T.MeshStandardMaterial({ map: turf, roughness: 0.92, metalness: 0 });
     mat.onBeforeCompile = (sh) => {
-      sh.uniforms.uMask = { value: this.maskTex };
-      sh.uniforms.uBox = { value: new T.Vector4(box.x, box.y, box.w, box.h) };
-      sh.vertexShader = 'varying vec3 vWP;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vWP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
-      sh.fragmentShader = `varying vec3 vWP; uniform sampler2D uMask; uniform vec4 uBox;
-        float h2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-        float vn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-          return mix(mix(h2(i), h2(i + vec2(1, 0)), f.x), mix(h2(i + vec2(0, 1)), h2(i + vec2(1, 1)), f.x), f.y); }
-        ` + sh.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+      Object.assign(sh.uniforms, this.detU, {
+        uSdf: { value: sdfTex }, uAlong: { value: alongTex },
+        uBox: { value: new T.Vector4(box.x, box.y, box.w, box.h) },
+        uTee: { value: new T.Vector4(tee.x, tee.y, tee.rot, 0) }, uTeeR: { value: new T.Vector2(tee.rx, tee.ry) },
+        uGreen: { value: new T.Vector3(gr.x, gr.y, (gr.rot || 0) + 0.6) },
+        uFw: { value: new T.Vector2(hole.fwFrom, hole.fwFrom < hole.fwTo ? 1 : 0) },
+        cFair: { value: col(L.fairway) }, cFair2: { value: col(L.fairway2) }, cFringe: { value: col(L.fringe) },
+        cGreen: { value: col(L.green) }, cGreen2: { value: col(L.green2) }, cSand: { value: col(L.sand) },
+        cLip: { value: col(L.sandLip) }, cBed: { value: col(L.bed) }, cRock: { value: col(L.rock || L.sandLip) },
+        uSea: { value: hole.water.some((w) => w.sea) ? 1 : 0 },
+      });
+      sh.vertexShader = 'varying vec3 vWP; varying vec3 vWN;\n' + sh.vertexShader
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\n vWP = (modelMatrix * vec4(transformed, 1.0)).xyz;')
+        .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n vWN = normalize(mat3(modelMatrix) * objectNormal);');
+      sh.fragmentShader = `varying vec3 vWP; varying vec3 vWN;
+        uniform sampler2D uSdf, uAlong;
+        uniform vec4 uBox, uTee; uniform vec2 uTeeR, uFw; uniform vec3 uGreen;
+        uniform vec3 cFair, cFair2, cFringe, cGreen, cGreen2, cSand, cLip, cBed, cRock; uniform float uSea;
+        uniform sampler2D uDFairA, uDFairN, uDGreenA, uDGreenN, uDRoughA, uDRoughN, uDSandA, uDSandN, uDSoilA, uDSoilN, uDMacro;
+        uniform float uDetOn;
+        float inside(float d) { float w = max(fwidth(d) * 0.75, 0.003); return 1.0 - smoothstep(-w, w, d); }
+        mat2 rot2(float a) { float c = cos(a), s = sin(a); return mat2(c, s, -s, c); }
+        // Two differently scaled and rotated lookups, switched by a slow
+        // noise, so tiling never lines up.
+        vec4 det(sampler2D t, vec2 p, float size, float sel) {
+          vec4 a = texture2D(t, p / size);
+          vec4 b = texture2D(t, rot2(1.1) * p / (size * 1.37) + vec2(0.37, 0.71));
+          return mix(a, b, sel);
+        }
+        ` + sh.fragmentShader
+        .replace('#include <map_fragment>', `#include <map_fragment>
+          vec2 suv = (vWP.xy - uBox.xy) / uBox.zw;
+          vec4 sdv = texture2D(uSdf, suv);
+          float dF = sdv.r, dG = sdv.g, dS = sdv.b, dW = sdv.a;
+          vec2 tq = rot2(-uTee.z) * (vWP.xy - uTee.xy);
+          vec2 tb = abs(tq) - uTeeR + 1.0;
+          float dT = length(max(tb, 0.0)) + min(max(tb.x, tb.y), 0.0) - 1.0;
+          vec3 col = diffuseColor.rgb;
+          // Fairway: a darker first cut, then broad mown stripes across the line.
+          float alongS = texture2D(uAlong, suv).r;
+          float su = (alongS - uFw.x + 30.0) / 9.0;
+          float sw = clamp(fwidth(su) * 1.5, 0.02, 0.5);
+          float stripe = smoothstep(0.5 - sw, 0.5 + sw, abs(fract(su * 0.5) - 0.5) * 2.0);
+          col = mix(col, cFair2 * 0.96, inside(dF - 1.2) * uFw.y);
+          float wFair = inside(dF) * uFw.y;
+          col = mix(col, mix(cFair, cFair2, stripe), wFair);
+          // Tee box with fine stripes.
+          float tu = tq.y / 3.0, tw = clamp(fwidth(tu) * 1.5, 0.02, 0.5);
+          float tst = smoothstep(0.5 - tw, 0.5 + tw, abs(fract(tu) - 0.5) * 2.0);
+          float wTee = inside(dT);
+          col = mix(col, mix(cFair, cFair2, tst), wTee);
+          wFair = max(wFair, wTee);
+          // Water beds with a sandy or rocky margin.
+          float wBank = inside(dW - (uSea > 0.5 ? 4.0 : 1.2));
+          col = mix(col, uSea > 0.5 ? cRock : cLip, wBank);
+          float wBed = inside(dW);
+          col = mix(col, cBed, wBed);
+          // Fringe, then the green with a checkerboard cut.
+          float wFringe = inside(dG - 2.6);
+          col = mix(col, cFringe, wFringe);
+          vec2 gq = rot2(-uGreen.z) * (vWP.xy - uGreen.xy) / 2.5;
+          float chk = sin(gq.x * 3.14159) * sin(gq.y * 3.14159);
+          float cw = clamp(fwidth(chk) * 1.5, 0.02, 1.0);
+          float checker = smoothstep(-cw, cw, chk);
+          float wGreen = inside(dG);
+          col = mix(col, mix(cGreen, cGreen2, checker), wGreen);
+          wFringe -= wGreen;
+          // Bunkers: a dark lip, then sand that brightens toward the middle.
+          col = mix(col, cLip, inside(dS - 0.55));
+          float wSand = inside(dS);
+          vec3 sandCol = mix(cSand * vec3(0.9, 0.84, 0.72), cSand * vec3(1.1, 1.04, 0.9), smoothstep(0.0, 2.5, -dS));
+          col = mix(col, sandCol, wSand);
+          // Grass banks around bunkers and greens catch a little shade.
+          col *= 1.0 - 0.12 * (inside(dS - 1.6) - inside(dS)) * (1.0 - wGreen);
+          diffuseColor.rgb = col;
+
+          // Crisp detail textures on every surface, fading with distance.
           float dCam = distance(cameraPosition, vWP);
-          float nearF = 1.0 - smoothstep(8.0, 70.0, dCam);
-          float g1 = vn(vWP.xy * 3.0), g2 = vn(vWP.xy * vec2(40.0, 9.0)) * 0.5 + vn(vWP.xy * vec2(9.0, 40.0)) * 0.5;
-          diffuseColor.rgb *= 1.0 + ((g1 - 0.5) * 0.1 + (g2 - 0.5) * 0.16) * nearF + (vn(vWP.xy * 0.12) - 0.5) * 0.08;
-          // Rough and wild grass: clumpy and a touch darker, so it reads as
-          // long grass beyond where the blades are drawn.
-          vec2 muv = (vWP.xy - uBox.xy) / uBox.zw;
-          vec4 mk = texture2D(uMask, vec2(muv.x, 1.0 - muv.y));
-          float rf = smoothstep(0.12, 0.22, mk.r) * (1.0 - smoothstep(0.35, 0.6, mk.r)) * (1.0 - smoothstep(0.05, 0.6, mk.g))
-            + (1.0 - smoothstep(0.02, 0.12, mk.r)) * (1.0 - smoothstep(0.1, 0.5, mk.b)) * (1.0 - smoothstep(0.1, 0.5, mk.g));
-          float clump = vn(vWP.xy * 0.9) * 0.55 + vn(vWP.xy * 3.3) * 0.3 + vn(vWP.xy * vec2(11.0, 7.0)) * 0.15;
-          diffuseColor.rgb *= 1.0 + rf * ((clump - 0.5) * 0.42 - 0.05);`);
+          float macro = texture2D(uDMacro, vWP.xy / 61.0).r;
+          float sel = smoothstep(0.42, 0.58, texture2D(uDMacro, vWP.xy / 23.0 + 0.5).r);
+          float wRough = clamp(1.0 - wFair - wGreen - max(wFringe, 0.0) - wSand - wBed, 0.0, 1.0);
+          vec4 dA = vec4(0.5), dN = vec4(0.5, 0.5, 1.0, 1.0);
+          if (uDetOn > 0.5) {
+            dA = vec4(0.0); dN = vec4(0.0);
+            float wf = wFair + max(wFringe, 0.0);
+            if (wf > 0.002) { dA += wf * det(uDFairA, vWP.xy, 1.1, sel); dN += wf * det(uDFairN, vWP.xy, 1.1, sel); }
+            if (wGreen > 0.002) { dA += wGreen * det(uDGreenA, vWP.xy, 0.9, sel); dN += wGreen * det(uDGreenN, vWP.xy, 0.9, sel); }
+            if (wRough > 0.002) { dA += wRough * det(uDRoughA, vWP.xy, 1.8, sel); dN += wRough * det(uDRoughN, vWP.xy, 1.8, sel); }
+            if (wSand > 0.002) { dA += wSand * det(uDSandA, vWP.xy, 2.0, sel); dN += wSand * det(uDSandN, vWP.xy, 2.0, sel); }
+            if (wBed > 0.002) { dA += wBed * det(uDSoilA, vWP.xy, 3.0, sel); dN += wBed * det(uDSoilN, vWP.xy, 3.0, sel); }
+          }
+          // A coarser pass of the same grass so the mid-distance isn't flat.
+          if (uDetOn > 0.5) {
+            float wg = 1.0 - wSand - wBed;
+            vec2 mp = rot2(0.7) * vWP.xy / 6.3;
+            vec3 midA = mix(texture2D(uDFairA, mp).rgb, texture2D(uDRoughA, mp).rgb, wRough);
+            dA.rgb = mix(dA.rgb, dA.rgb * midA * 2.0, 0.6 * wg * smoothstep(4.0, 18.0, dCam));
+          }
+          float detFade = 1.0 - smoothstep(60.0, 220.0, dCam);
+          diffuseColor.rgb *= mix(vec3(1.0), dA.rgb * 2.0, detFade) * (1.0 + (macro - 0.5) * (0.25 + 0.3 * wRough));
+          vec3 tN = dN.xyz * 2.0 - 1.0;
+          float nStr = (0.6 + 0.4 * wRough + 0.9 * wSand) * (1.0 - smoothstep(30.0, 140.0, dCam));
+          vec3 wN = normalize(vWN + (vec3(1.0, 0.0, 0.0) * tN.x + vec3(0.0, 1.0, 0.0) * tN.y) * nStr);`)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+          normal = normalize(mat3(viewMatrix) * wN);`)
+        .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+          roughnessFactor = mix(0.95, 0.78, wGreen) * mix(1.0, 1.05, wSand);`);
     };
+    mat.customProgramCacheKey = () => 'pl-terrain';
     const mesh = new T.Mesh(geo, mat);
     mesh.receiveShadow = true;
     mesh.userData.ownMat = true;
@@ -697,51 +1038,45 @@ export class View3D {
 
   buildSky(L, group, hole) {
     const T = this.T;
+    const r = seeded(hole.index * 7 + 2);
     const skyMat = new T.ShaderMaterial({
-      uniforms: { uTop: { value: new T.Color(L.skyTop) }, uHorizon: { value: new T.Color(L.skyHorizon) }, uSun: { value: this.sunDir }, uSunCol: { value: new T.Color(L.sun) } },
+      uniforms: {
+        uTop: { value: new T.Color(L.skyTop) }, uHorizon: { value: new T.Color(L.skyHorizon) }, uSun: { value: this.sunDir }, uSunCol: { value: new T.Color(L.sun) },
+        uClouds: this.cloudsU, uCloudAmt: { value: Math.min(1, 0.45 + L.cloud * 0.35) }, uCloudRot: { value: r() }, uTime: this.timeU,
+      },
       vertexShader: 'varying vec3 vD; void main() { vD = normalize(position); vec4 p = modelViewMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * p; gl_Position.z = gl_Position.w * 0.9999; }',
       fragmentShader: `uniform vec3 uTop; uniform vec3 uHorizon; uniform vec3 uSun; uniform vec3 uSunCol; varying vec3 vD;
+        uniform sampler2D uClouds; uniform float uCloudAmt, uCloudRot, uTime;
         void main() {
-          float e = clamp(vD.z, 0.0, 1.0);
+          vec3 d = normalize(vD);
+          float e = clamp(d.z, 0.0, 1.0);
           vec3 c = mix(uHorizon, uTop, pow(e, 0.45));
-          float s = max(dot(normalize(vD), uSun), 0.0);
+          float s = max(dot(d, uSun), 0.0);
           c += uSunCol * (pow(s, 900.0) * 6.0 + pow(s, 40.0) * 0.35 + pow(s, 6.0) * 0.12);
+          // Painted cloud band: azimuth across, 0-40 degrees up.
+          float el = asin(clamp(d.z, 0.0, 1.0)) / 0.698;
+          if (el < 1.0) {
+            float az = atan(d.y, d.x) / 6.2831853 + 0.5 + uCloudRot + uTime * 0.0004;
+            vec4 cl = texture2D(uClouds, vec2(az, el));
+            float lit = pow(s, 4.0);
+            vec3 cc = cl.rgb * mix(vec3(1.0), uSunCol, 0.35) * (1.0 + lit * 0.5);
+            cc = mix(cc, uHorizon * 1.05, (1.0 - el) * 0.25);
+            c = mix(c, cc, cl.a * uCloudAmt * smoothstep(0.0, 0.04, el));
+          }
           if (vD.z < 0.0) c = uHorizon;
           gl_FragColor = vec4(c, 1.0);
         }`,
       side: T.BackSide, depthWrite: false, fog: false,
     });
-    const sky = new T.Mesh(new T.SphereGeometry(3000, 32, 16), skyMat);
+    const sky = new T.Mesh(new T.SphereGeometry(3000, 48, 24), skyMat);
     sky.userData.ownMat = true;
     sky.frustumCulled = false;
     sky.renderOrder = -10;
     this.sky = sky;
     group.add(sky);
 
-    // Puffy stylised clouds.
-    const r = seeded(hole.index * 7 + 2);
-    const cloudMat = new T.MeshStandardMaterial({ color: 0xffffff, roughness: 1, emissive: new T.Color(L.skyHorizon), emissiveIntensity: 0.45, fog: false });
-    const cx = this.box.x + this.box.w / 2, cy = this.box.y + this.box.h / 2;
-    const n = Math.round(14 * L.cloud);
-    for (let i = 0; i < n; i++) {
-      const parts = [];
-      const m = 5 + Math.floor(r() * 5);
-      for (let k = 0; k < m; k++) {
-        const g = new T.IcosahedronGeometry(1, 2);
-        const s = 22 + r() * 30;
-        g.scale(s * 1.25, s, s * 0.6).translate((k - m / 2) * 28 + r() * 10, r() * 12, r() * 10 + (k % 2) * 8);
-        parts.push(g);
-      }
-      const geo = T.mergeGeometries(parts);
-      geo.rotateX(Math.PI / 2);
-      const cl = new T.Mesh(geo, cloudMat);
-      const a = r() * TAU, d = 1100 + r() * 900;
-      cl.position.set(cx + Math.cos(a) * d, cy + Math.sin(a) * d, 260 + r() * 260);
-      cl.rotation.z = r() * TAU;
-      group.add(cl);
-    }
-
     // Rounded hills on the horizon.
+    const cx = this.box.x + this.box.w / 2, cy = this.box.y + this.box.h / 2;
     const hillMat = new T.MeshStandardMaterial({ color: 0xffffff, roughness: 1 });
     const hills = new T.InstancedMesh(new T.SphereGeometry(1, 28, 14), hillMat, 44);
     const m = new T.Matrix4(), q = new T.Quaternion(), sc = new T.Vector3(), p = new T.Vector3();
@@ -806,10 +1141,13 @@ export class View3D {
         uShallow: { value: new T.Color(L.water) }, uDeep: { value: new T.Color(L.deepWater) }, uSky: { value: new T.Color(L.skyHorizon) }, uSkyTop: { value: new T.Color(L.skyTop) },
         uSun: { value: this.sunDir }, uSunCol: { value: new T.Color(L.sun) }, uSea: { value: sea ? 1 : 0 },
         uFog: { value: new T.Color(L.skyHorizon) }, uFogRange: { value: new T.Vector2(L.fogNear, L.fogFar) },
+        tRefl: { value: null }, textureMatrix: { value: new T.Matrix4() }, uRefl: { value: 0 },
       },
-      vertexShader: 'varying vec3 vW; void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }',
+      vertexShader: `uniform mat4 textureMatrix; varying vec3 vW; varying vec4 vRefl;
+        void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; vRefl = textureMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * viewMatrix * w; }`,
       fragmentShader: `uniform sampler2D uMask; uniform sampler2D uShore; uniform vec4 uBox; uniform float uTime; uniform vec3 uShallow; uniform vec3 uDeep; uniform vec3 uSky; uniform vec3 uSkyTop;
         uniform vec3 uSun; uniform vec3 uSunCol; uniform float uSea; uniform vec3 uFog; uniform vec2 uFogRange; varying vec3 vW;
+        uniform sampler2D tRefl; uniform float uRefl; varying vec4 vRefl;
         float h2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         float vn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
           return mix(mix(h2(i), h2(i + vec2(1, 0)), f.x), mix(h2(i + vec2(0, 1)), h2(i + vec2(1, 1)), f.x), f.y); }
@@ -841,7 +1179,13 @@ export class View3D {
           // Sky in the surface.
           vec3 R = reflect(-V, N);
           vec3 sky = mix(uSky, uSkyTop, clamp(R.z * 1.5, 0.0, 1.0));
-          col = mix(col, sky, clamp(0.12 + fres * 0.75, 0.0, 0.85));
+          if (uRefl > 0.5) {
+            // The real scene mirrored in the surface, wobbled by the ripples.
+            vec4 rp = vRefl;
+            rp.xy += n * rp.w * (0.3 + 0.7 * nearW) * 0.022;
+            sky = texture2DProj(tRefl, rp).rgb;
+          }
+          col = mix(col, sky, clamp(0.16 + fres * 0.7, 0.0, 0.8));
           // Sun: a soft sheen and crisp cartoon glints.
           float sp = max(dot(R, uSun), 0.0);
           col += uSunCol * (pow(sp, 60.0) * 0.5 + step(0.992, sp) * 1.6 * (0.3 + 0.7 * nearW));
@@ -862,7 +1206,23 @@ export class View3D {
       transparent: true, depthWrite: false,
     });
     const geo = new T.PlaneGeometry(box.w, box.h);
-    const w = new T.Mesh(geo, mat);
+    // A planar mirror renders the scene (minus the grass) for reflections;
+    // only at the top quality setting.
+    const size = new T.Vector2();
+    this.renderer.getDrawingBufferSize(size);
+    const w = new T.Reflector(geo, { textureWidth: Math.round(size.x * 0.5), textureHeight: Math.round(size.y * 0.5), clipBias: 0.02 });
+    const own = w.material;
+    mat.uniforms.tRefl.value = own.uniforms.tDiffuse.value;
+    mat.uniforms.textureMatrix = own.uniforms.textureMatrix;
+    w.material = mat;
+    own.dispose();
+    const reflect = w.onBeforeRender;
+    w.onBeforeRender = (...args) => {
+      const on = this.quality >= 2;
+      mat.uniforms.uRefl.value = on ? 1 : 0;
+      if (on) reflect.apply(w, args);
+    };
+    this.reflector = w;
     w.position.set(box.x + box.w / 2, box.y + box.h / 2, -0.12);
     w.userData.ownMat = true;
     w.renderOrder = 2;
@@ -874,7 +1234,9 @@ export class View3D {
     const r = seeded(hole.index * 13 + 5);
     const m = new T.Matrix4(), q = new T.Quaternion(), s = new T.Vector3(), p = new T.Vector3(), zAxis = new T.Vector3(0, 0, 1);
     const col = new T.Color();
+    // The bark texture carries the colour; the course's trunk colour just tints it.
     const trunkCol = new T.Color(L.trunk);
+    trunkCol.multiplyScalar(0.92 / Math.max(trunkCol.r, trunkCol.g, trunkCol.b)).lerp(new T.Color(1, 1, 1), 0.35);
     // Each kind has a detailed model for nearby trees and a cheap one for the
     // rest; updateTrees() sorts them as the camera moves.
     this.treeKindsLive = [];
@@ -1089,6 +1451,34 @@ export class View3D {
   }
 
   // Terrain height at a point (bilinear), for placing things on the ground.
+  // Sky light from an HDRI, loaded once per course look.
+  useEnv(name, L) {
+    const T = this.T;
+    const apply = (e) => {
+      if (this.look !== L) return;
+      this.scene.environment = e.tex;
+      // Each HDRI is scaled to the same average brightness (sun excluded),
+      // so the sky light is consistent from course to course.
+      this.scene.environmentIntensity = (L.envI ?? 0.8) * (0.28 / e.mean);
+      this.hemi.intensity = L.hemiI * 0.35;
+    };
+    if (this.envCache[name]) return apply(this.envCache[name]);
+    new T.EXRLoader().load(new URL(`../assets/env/${name}.exr`, import.meta.url).href + VERSIONED, (eq) => {
+      eq.mapping = T.EquirectangularReflectionMapping;
+      const d = eq.image.data, half = d instanceof Uint16Array;
+      let sum = 0, n = 0;
+      for (let i = 0; i < d.length; i += 4 * 7) {
+        const v = (k) => (half ? T.DataUtils.fromHalfFloat(d[k]) : d[k]);
+        sum += Math.min(3, (v(i) + v(i + 1) + v(i + 2)) / 3);
+        n++;
+      }
+      const e = { tex: this.pmrem.fromEquirectangular(eq).texture, mean: Math.max(0.05, sum / n) };
+      eq.dispose();
+      this.envCache[name] = e;
+      apply(e);
+    });
+  }
+
   // Sort trees into near (detailed) and far (simple) models, and hide any
   // right beside the camera so they don't fill the screen.
   updateTrees(eye) {
