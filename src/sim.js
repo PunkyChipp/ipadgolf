@@ -1,6 +1,6 @@
 // Shot simulation. Pure and deterministic: the same inputs and seed always
 // give the same result, so two iPads can replay each other's shots exactly.
-import { T, TERRAIN_NAMES, rng, hashSeed } from './course.js?v=11';
+import { T, TERRAIN_NAMES, rng, hashSeed } from './course.js?v=12';
 
 export const G = 10.72; // gravity, yards/s²
 export const CUP_R = 0.075; // a little larger than a real cup (0.059 yd)
@@ -145,18 +145,86 @@ export function meterWindow(lie, club, power, shape = 0, spinMag = 0, gear = nul
 export const MISHIT = 2.2;
 
 export function shotLabel(e) {
+  return strikeOf(e).label;
+}
+
+// What kind of strike a timing error gives, for a right-handed golfer.
+// Tapping early (e > 0) leaves the face open: fades and slices, and with
+// irons the dreaded shank off the hosel. Tapping late (e < 0) shuts it:
+// draws and hooks, and the thin and fat strikes. Deliberate shaping pays off when it is timed
+// well, gets overcooked when mistimed the same way, and can double-cross
+// when mistimed the other way.
+export function strikeOf(e, spinX = 0, clubIdx = 6, lie = T.FAIRWAY) {
   const a = Math.abs(e);
-  if (a <= 0.22) return 'Perfect';
-  if (a <= 0.55) return e > 0 ? 'Fade' : 'Draw';
-  if (a <= 1.1) return e > 0 ? 'Slice' : 'Hook';
-  if (a <= MISHIT) return e > 0 ? 'Big slice' : 'Snap hook';
-  return e > 0 ? 'Shank' : 'Duff';
+  const club = CLUBS[clubIdx] || CLUBS[6];
+  const wood = club.carry >= 200;
+  const teed = lie === T.TEE;
+  const k = { kind: 'ok', label: '', carry: 1, apex: 1, flight: 1, push: 0, timing: 1, intended: 1, roll: 1, bite: 1, curveAdd: 0 };
+  if (a > MISHIT) {
+    let h = Math.sin(e * 9137.13) * 43758.5453;
+    h -= Math.floor(h);
+    let kind;
+    if (e > 0) kind = wood ? (teed && h < 0.5 ? 'sky' : 'banana') : 'shank';
+    else kind = teed && wood ? (h < 0.5 ? 'sky' : 'top') : h < 0.5 ? 'top' : 'duff';
+    k.kind = kind;
+    k.timing = 0;
+    k.intended = 0.2;
+    if (kind === 'shank') Object.assign(k, { label: 'Shank!', carry: 0.38, apex: 0.35, flight: 0.7, push: 1.15, roll: 1.3, bite: 0 });
+    if (kind === 'banana') Object.assign(k, { label: 'Banana slice', carry: 0.72, apex: 0.85, curveAdd: 0.42, roll: 0.8, bite: 0 });
+    if (kind === 'sky') Object.assign(k, { label: 'Skied it!', carry: 0.42, apex: 2.3, flight: 1.25, roll: 0.15, bite: 0, push: (h - 0.25) * 0.1 });
+    if (kind === 'top') Object.assign(k, { label: 'Topped it', carry: 0.16, apex: 0.06, flight: 0.45, roll: 2.2, bite: 0, push: -0.03 });
+    if (kind === 'duff') Object.assign(k, { label: 'Chunked it', carry: 0.3, apex: 0.4, flight: 0.6, roll: 0.5, bite: 0 });
+    return k;
+  }
+  const side = e > 0 ? 1 : -1;
+  if (Math.abs(spinX) >= 0.1) {
+    const want = spinX > 0 ? (spinX > 0.7 ? 'slice' : 'fade') : spinX > -0.7 ? 'draw' : 'hook';
+    if (a <= 0.35) {
+      // Pure: the ball does exactly what was asked, with a bonus.
+      k.kind = 'pure';
+      k.label = 'Pure ' + want + '!';
+      k.timing = 0.1;
+      if (spinX < 0) { k.carry = 1.04; k.roll = 1.25; } // draws bore through and run
+      else { k.bite = 1.4; k.apex = 1.06; } // fades fly high and sit down
+      return k;
+    }
+    if (side === Math.sign(spinX)) {
+      k.kind = 'overcooked';
+      k.label = side > 0 ? (a > 1.1 ? 'Overcooked slice' : 'Too much fade') : a > 1.1 ? 'Overcooked hook' : 'Too much draw';
+      k.timing = 1.7;
+    } else {
+      k.kind = 'double';
+      k.label = 'Double cross!';
+      k.intended = -0.55;
+      k.timing = 0.6;
+    }
+  } else if (a <= 0.22) {
+    k.kind = 'perfect';
+    k.label = 'Perfect';
+    return k;
+  } else {
+    k.kind = a <= 0.55 ? 'shape' : 'miss';
+    k.label = a <= 0.55 ? (side > 0 ? 'Fade' : 'Draw') : a <= 1.1 ? (side > 0 ? 'Slice' : 'Hook') : side > 0 ? 'Big slice' : 'Snap hook';
+  }
+  // Unwanted curve costs: slices balloon and lose distance, hooks dive and
+  // run hot.
+  const over = Math.max(0, a - 0.45);
+  if (side > 0) {
+    k.carry *= 1 - Math.min(0.24, over * 0.13);
+    k.apex *= 1 + Math.min(0.2, over * 0.1);
+    k.roll *= 1 - Math.min(0.5, over * 0.3);
+  } else {
+    k.carry *= 1 - Math.min(0.12, over * 0.06);
+    k.apex *= 1 - Math.min(0.35, over * 0.2);
+    k.roll *= 1 + Math.min(0.8, over * 0.45);
+  }
+  return k;
 }
 
 // Sideways curve as a fraction of carry for a timing error.
 function timingCurve(e) {
   const a = Math.abs(e);
-  if (a > MISHIT) return Math.sign(e) * (e > 0 ? 0.33 : 0.05);
+  if (a > MISHIT) return 0;
   const c = a <= 1 ? a * 0.12 : 0.12 + (a - 1) * 0.14;
   return Math.sign(e) * c;
 }
@@ -234,12 +302,16 @@ export function simulateShot(hole, ball, input, wind, seed) {
   }
 
   // Release: how far it runs depends on the club, the power and where it lands.
-  const prev = frames[Math.max(0, frames.length - 4)];
-  let hx = last.x - prev.x, hy = last.y - prev.y;
+  // The ball runs on along its line of flight, turned a little further the
+  // way it was curving. (The tangent at touchdown is no good: the model's
+  // forward speed fades to nothing there while the curve is still at work.)
+  let hx = last.x - ball.x, hy = last.y - ball.y;
   const hl = Math.hypot(hx, hy) || 1;
   hx /= hl; hy /= hl;
+  const bend = Math.sign(fp.curve) * Math.min(0.22, (Math.abs(fp.curve) / Math.max(carry, 1)) * 1.1);
+  [hx, hy] = [hx * Math.cos(bend) - hy * Math.sin(bend), hx * Math.sin(bend) + hy * Math.cos(bend)];
   const release = (RELEASE[land] ?? 0.3) * (land === T.FAIRWAY || land === T.ROUGH ? hole.firm || 1 : 1);
-  let rollDist = (club.roll * fp.shape.roll + fp.shape.rollAdd) * release * Math.min(1, p) * (mishit ? 2 : 1);
+  let rollDist = (club.roll * fp.shape.roll + fp.shape.rollAdd) * release * Math.min(1, p) * fp.strike.roll;
   // Short shots come in low and release like a chip: a 9 iron runs out,
   // a lob wedge barely moves. Full swings carry their spin and stop.
   // Chip and Flop are measured against the club's normal full swing.
@@ -251,10 +323,10 @@ export function simulateShot(hole, ball, input, wind, seed) {
   rollDist *= fp.g.roll;
   // Topspin releases the ball; backspin grips, and a wedge can zip it backwards.
   rollDist *= 1 + 1.2 * fp.top;
-  const bite = (club.wedge ? 1 : club.carry > 200 ? 0.25 : 0.6) * (SPIN_GRIP[land] ?? 0) * Math.min(1, 0.35 + p) * (mishit ? 0 : 1) * fp.g.bite * (fp.shape.bite || 1);
+  const bite = (club.wedge ? 1 : club.carry > 200 ? 0.25 : 0.6) * (SPIN_GRIP[land] ?? 0) * Math.min(1, 0.35 + p) * fp.strike.bite * fp.g.bite * (fp.shape.bite || 1);
   rollDist -= fp.back * bite * 8;
   // Side spin kicks the ball sideways as it lands.
-  const kick = fp.spin.x * 0.22;
+  const kick = fp.spin.x * 0.06;
   [hx, hy] = [hx * Math.cos(kick) - hy * Math.sin(kick), hx * Math.sin(kick) + hy * Math.cos(kick)];
   // How the ball arrives: steeper for high shots, flatter for drivers and
   // punches; faster for longer shots.
@@ -468,6 +540,7 @@ export function flightParams(ball, input, wind, r = () => 0.5) {
   const lie = lieEffect(ball.lie, input.club);
   const e = input.acc || 0;
   const mishit = Math.abs(e) > MISHIT;
+  const st = strikeOf(e, (input.spin || {}).x || 0, input.club, ball.lie);
   const p = input.power;
   const powerDist = p <= 1 ? p : 1 + (p - 1) * 0.8;
   const spin = input.spin || { x: 0, y: 0 };
@@ -475,10 +548,9 @@ export function flightParams(ball, input, wind, r = () => 0.5) {
   const top = Math.max(0, spin.y) * g.spin, back = Math.max(0, -spin.y) * g.spin;
   let carry = club.carry * shape.carry * powerDist * lie.dist * g.carry * (1 + (r() - 0.5) * 2 * lie.spread);
   carry *= 1 - 0.05 * Math.min(1, Math.hypot(spin.x, spin.y));
-  if (mishit) carry *= e > 0 ? 0.55 : 0.35;
-  else carry *= 1 - Math.min(0.1, Math.max(0, Math.abs(e) - 0.22) * 0.05);
-  const flight = club.time * shape.time * (0.45 + 0.55 * Math.min(1, p));
-  let apex = club.apex * shape.apex * g.apex * (0.4 + 0.6 * Math.min(1, p)) * (mishit && e < 0 ? 0.35 : 1);
+  carry *= st.carry;
+  const flight = club.time * shape.time * (0.45 + 0.55 * Math.min(1, p)) * st.flight;
+  let apex = club.apex * shape.apex * g.apex * (0.4 + 0.6 * Math.min(1, p)) * st.apex;
   apex *= (1 - 0.25 * top) * (1 + 0.12 * back);
   if (shape.maxApex) apex = Math.min(apex, shape.maxApex);
   const [dx, dy] = dirOf(input.aim);
@@ -492,14 +564,16 @@ export function flightParams(ball, input, wind, r = () => 0.5) {
     carry, flight, apex, mishit, shape, dx, dy, rx, ry,
     drift: cross * 0.3 * flight * (apex / 30),
     // side spin bends the ball on purpose; timing errors add to it
-    curve: (timingCurve(e) * g.curve + spin.x * 0.17 * g.shape) * carry,
-    spin, top, back, g,
-    push: Math.max(-0.05, Math.min(0.05, e * 0.018)), // start line a touch off with mistimed swings
+    curve: (timingCurve(e) * g.curve * st.timing + spin.x * 0.17 * g.shape * st.intended + st.curveAdd) * carry,
+    spin, top, back, g, strike: st,
+    // Start line a touch off with mistimed swings; way off with a shank.
+    push: st.push || Math.max(-0.05, Math.min(0.05, e * 0.018)),
   };
 }
 
 export function flightPoint(ball, fp, s) {
-  const alongD = fp.carry * (1 - Math.pow(1 - s, 1.6));
+  // Drag slows the ball, but it still comes in moving forward.
+  const alongD = fp.carry * (0.3 * s + 0.7 * (1 - Math.pow(1 - s, 1.6)));
   // Curve builds late in the flight, as the ball slows and the spin takes over.
   const lat = fp.push * alongD + fp.curve * Math.pow(s, 2.3) + fp.drift * Math.pow(s, 1.5);
   const sp = Math.pow(s, 1.25);

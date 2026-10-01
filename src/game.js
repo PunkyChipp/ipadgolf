@@ -1,11 +1,11 @@
-import { buildHole as buildHoleRaw, windFor, HOLES, COURSES, courseOf, T, TERRAIN_NAMES } from './course.js?v=11';
+import { buildHole as buildHoleRaw, windFor, HOLES, COURSES, courseOf, T, TERRAIN_NAMES } from './course.js?v=12';
 import {
-  simulateShot, CLUBS, PUTTER, PUTT_SCALES, SHAPES, FULL_SHAPES, SHORT_SHAPES, GEAR, GEAR_STATS, DEFAULT_GEAR, gearFor, MISHIT, meterWindow, lieEffect, suggestClub, suggestPuttScale, shotSeed, shotLabel, previewShot, flightParams, flightPoint,
-} from './sim.js?v=11';
-import { Renderer } from './render.js?v=11';
-import { Sound } from './audio.js?v=11';
-import { Link, makeCode, cleanCode } from './net.js?v=11';
-import { View3D, parseColor } from './view3d.js?v=11';
+  simulateShot, CLUBS, PUTTER, PUTT_SCALES, SHAPES, FULL_SHAPES, SHORT_SHAPES, GEAR, GEAR_STATS, DEFAULT_GEAR, gearFor, MISHIT, meterWindow, lieEffect, suggestClub, suggestPuttScale, shotSeed, shotLabel, strikeOf, previewShot, flightParams, flightPoint,
+} from './sim.js?v=12';
+import { Renderer } from './render.js?v=12';
+import { Sound } from './audio.js?v=12';
+import { Link, makeCode, cleanCode } from './net.js?v=12';
+import { View3D, parseColor } from './view3d.js?v=12';
 
 const $ = (s) => document.querySelector(s);
 
@@ -424,6 +424,10 @@ function updatePreview() {
     end: res.frames[res.frames.length - 1],
     outcome: res.outcome,
     tree: res.events.some((e) => e.type === 'tree'),
+    treeHit: (() => {
+      const t = res.events.find((e) => e.type === 'tree');
+      return t ? { x: t.x, y: t.y, z: res.frames[t.f] ? res.frames[t.f].z : 0, d: Math.hypot(t.x - ball.x, t.y - ball.y) } : null;
+    })(),
   };
 }
 
@@ -656,7 +660,12 @@ function startAnim(p, input, res) {
     const e = input.acc;
     const ae = Math.abs(e);
     sound.strike(club.carry > 200 ? 'wood' : 'iron', ae <= 0.22 ? 'perfect' : ae > 1.1 ? 'bad' : 'ok');
-    popup(who + shotLabel(e), ae <= 0.22 ? '#ffe27a' : ae > MISHIT ? '#ff9a8a' : ae > 0.55 ? '#ffc9a8' : '#ffffff', 1.3, who ? 24 : 30);
+    const st = strikeOf(e, (input.spin || {}).x || 0, input.club, ball.lie);
+    const good = st.kind === 'perfect' || st.kind === 'pure';
+    const awful = ae > MISHIT || st.kind === 'double';
+    popup(who + st.label, good ? '#ffe27a' : awful ? '#ff9a8a' : ae > 0.55 ? '#ffc9a8' : '#ffffff', good && st.kind === 'pure' ? 1.6 : 1.3, who ? 24 : 30);
+    if (st.kind === 'pure' && mine) sound.applause(0.35);
+    else if (ae > MISHIT && mine) sound.groan();
     if (ae <= 0.22 && mine) R.ring(ball.x, ball.y, 0.3, 4, 'rgba(255,226,122,0.95)', 0.5);
     if (ball.lie === T.SAND) R.burst(ball.x, ball.y, 26, { colors: ['#f3e3b5', '#d9c38c'], speed: 6, up: 6, life: 0.9, size: 0.25 });
     else if (ball.lie !== T.TEE) R.burst(ball.x, ball.y, 12, { colors: ['#5c8a3a', '#7a5a33'], speed: 5, up: 5, life: 0.7, size: 0.2, angle: input.aim, spread: 0.8 });
@@ -783,6 +792,8 @@ function finishShotFx(a) {
       else sound.applause(big);
     }
     R.ring(hole.pin.x, hole.pin.y, 0.1, 2.5, 'rgba(255,255,255,0.9)', 0.8);
+    R.ring(hole.pin.x, hole.pin.y, 0.05, 1.4, 'rgba(255,226,122,0.95)', 0.6);
+    R.burst(hole.pin.x, hole.pin.y, 26, { colors: ['#ffe27a', '#fff6c8', '#ffffff'], speed: 2.5, up: 5, life: 1.1, size: 0.12 });
     if (d < 0 || strokes === 1) R.burst(hole.pin.x, hole.pin.y, strokes === 1 ? 90 : 46, { colors: ['#ffd23f', '#ff5fa2', '#7fd3ff', '#ffffff', '#8be08b'], speed: 7, up: 9, life: 1.6, size: 0.3 });
   } else if (res.outcome === 'water') {
     popup(who + 'In the water', '#a8e4ff', 1.8, 30);
@@ -1267,6 +1278,10 @@ function update(dt) {
   }
   tickMeter();
   updatePreview();
+  if (U.fly) {
+    U.fly.t += dt;
+    if (U.fly.t > U.fly.dur || U.phase !== 'aim' || U.swing.phase !== 'idle') endFly();
+  }
   updateCamera(dt);
   if (use3D()) updateCamera3D(dt);
   const wa = wind.dir + (use3D() && U.cam3 ? -Math.PI / 2 - Math.atan2(U.cam3.target[1] - U.cam3.eye[1], U.cam3.target[0] - U.cam3.eye[0]) : U.cam.rot);
@@ -1565,6 +1580,10 @@ function show3D(on) {
   if (shown3D === on) return;
   shown3D = on;
   $('#game3d').style.visibility = on ? 'visible' : 'hidden';
+  if (!on) {
+    $('#flyBtn').hidden = true;
+    if (U.fly) endFly();
+  }
 }
 
 function flagColor() {
@@ -1610,6 +1629,7 @@ function camera3DTarget() {
   // A shot in the air: chase it, then cut to a camera by the landing spot.
   const a = animFor(p) || (!G.simul ? U.anims[0] : null) || (pl.holed ? U.anims[0] : null);
   if (a) return chaseCam(a);
+  if (U.fly) return flyCam();
   if (U.dragging && U.dragging.cam3) return U.dragging.cam3;
   const watch = pl.holed && G.simul ? G.players.findIndex((q) => !q.holed && q.h === G.h) : p;
   const ball = G.players[watch >= 0 ? watch : p].ball;
@@ -1650,8 +1670,30 @@ function chaseCam(a) {
   const club = CLUBS[a.input.club];
   const [dx, dy] = d2(a.input.aim);
   if (club.putter) {
+    // When a putt is going in, or coming close, cut down beside the cup and
+    // watch it arrive.
+    if (a.cupCut == null) {
+      let near = Infinity, at = -1;
+      fr.forEach((q, i) => {
+        const d = Math.hypot(q.x - hole.pin.x, q.y - hole.pin.y);
+        if (d < near) near = d;
+        if (at < 0 && d < 2.6) at = i;
+      });
+      const from = Math.hypot(fr[0].x - hole.pin.x, fr[0].y - hole.pin.y);
+      a.cupCut = (a.res.outcome === 'holed' || near < 0.3) && from > 3.2 && at > 0 ? at : -1;
+    }
+    if (a.cupCut > 0 && a.i >= a.cupCut) {
+      if (!a.cupEye) {
+        const s0 = fr[a.cupCut], ux = hole.pin.x - s0.x, uy = hole.pin.y - s0.y, ul = Math.hypot(ux, uy) || 1;
+        const ex = hole.pin.x + (ux / ul) * 1.1 + (uy / ul) * 1.3, ey = hole.pin.y + (uy / ul) * 1.1 - (ux / ul) * 1.3;
+        a.cupEye = [ex, ey, groundZ(ex, ey) + 0.28];
+        U.cam3 = { eye: a.cupEye.slice(), target: [f.x, f.y, groundZ(f.x, f.y)] };
+      }
+      const tx = (f.x + hole.pin.x) / 2, ty = (f.y + hole.pin.y) / 2;
+      return { eye: a.cupEye, target: [tx, ty, groundZ(tx, ty) + 0.02], speed: 5, low: true };
+    }
     const ex = f.x - dx * 3, ey = f.y - dy * 3;
-    return { eye: [ex, ey, groundZ(ex, ey) + 1.15], target: [f.x + dx * 3, f.y + dy * 3, groundZ(f.x, f.y)], speed: 4 };
+    return { eye: [ex, ey, groundZ(ex, ey) + 1.0], target: [f.x + dx * 3, f.y + dy * 3, groundZ(f.x, f.y)], speed: 4, low: true };
   }
   if (a.landF == null) {
     a.landF = landIndex(a.res, false);
@@ -1682,17 +1724,89 @@ function updateCamera3D(dt) {
   const want = camera3DTarget();
   // Never let the camera sink into a hill.
   want.eye = want.eye.slice();
-  want.eye[2] = Math.max(want.eye[2], groundZ(want.eye[0], want.eye[1]) + 1.3);
+  want.eye[2] = Math.max(want.eye[2], groundZ(want.eye[0], want.eye[1]) + (want.low ? 0.22 : 1.3));
   if (!U.cam3 || want.speed === 0) {
     U.cam3 = { eye: want.eye.slice(), target: want.target.slice() };
     return;
   }
   const k = 1 - Math.exp(-dt * want.speed);
   for (const key of ['eye', 'target']) for (let i = 0; i < 3; i++) U.cam3[key][i] += (want[key][i] - U.cam3[key][i]) * k;
-  U.cam3.eye[2] = Math.max(U.cam3.eye[2], groundZ(U.cam3.eye[0], U.cam3.eye[1]) + 1.1);
+  U.cam3.eye[2] = Math.max(U.cam3.eye[2], groundZ(U.cam3.eye[0], U.cam3.eye[1]) + (want.low ? 0.2 : 1.1));
+}
+
+// ---------- fly the line / read the green ----------
+// "Fly" sends the camera along the planned flight like a drone, with a ghost
+// ball, so you can see whether it threads the trees. On the green, "Read"
+// crouches down and walks the line to the hole to show the contours.
+
+function startFly() {
+  if (!use3D() || U.phase !== 'aim' || !U.preview || U.swing.phase !== 'idle') return;
+  if (U.fly) return endFly();
+  const putt = !!CLUBS[U.club].putter;
+  const pv = U.preview, ball = currentBall();
+  let travel;
+  if (putt) travel = Math.min(4.2, 1.8 + toPin(hole, ball) * 0.14);
+  else {
+    const L = pv.frames[Math.max(1, Math.min(pv.landF, pv.frames.length - 1))];
+    travel = Math.min(3.4, 1.4 + Math.hypot(L.x - ball.x, L.y - ball.y) / 110);
+  }
+  U.fly = { t: 0, lead: 0.5, travel, dur: 0.5 + travel + 1.6, putt, pv, said: false };
+  $('#flyBtn').classList.add('on');
+  sound.whoosh(0.6);
+}
+
+function endFly() {
+  U.fly = null;
+  $('#flyBtn').classList.remove('on');
+}
+
+function flyPoint(k) {
+  const fr = U.fly.pv.frames, lf = Math.max(1, Math.min(U.fly.pv.landF, fr.length - 1));
+  const x = Math.max(0, Math.min(1, k)) * lf, i = Math.floor(x), j = Math.min(lf, i + 1), u = x - i;
+  const A = fr[i], B = fr[j];
+  return [A.x + (B.x - A.x) * u, A.y + (B.y - A.y) * u, lifted(fr, lf, i) * (1 - u) + lifted(fr, lf, j) * u];
+}
+
+function flyProgress() {
+  const f = U.fly;
+  const s = Math.max(0, Math.min(1, (f.t - f.lead) / f.travel));
+  return s * s * (3 - 2 * s);
+}
+
+function flyCam() {
+  const f = U.fly, ball = currentBall();
+  const e = flyProgress();
+  const done = f.t > f.lead + f.travel;
+  if (f.putt) {
+    const dx = hole.pin.x - ball.x, dy = hole.pin.y - ball.y, L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L;
+    if (done) {
+      // Crouched behind the cup, looking back up the line.
+      const ex = hole.pin.x + ux * 2.2 + uy * 0.4, ey = hole.pin.y + uy * 2.2 - ux * 0.4;
+      return { eye: [ex, ey, groundZ(ex, ey) + 0.35], target: [ball.x, ball.y, groundZ(ball.x, ball.y)], speed: 2.4, low: true };
+    }
+    const along = -1.6 + e * (L - 0.6);
+    const ex = ball.x + ux * along, ey = ball.y + uy * along;
+    const tx = ex + ux * 3, ty = ey + uy * 3;
+    return { eye: [ex, ey, groundZ(ex, ey) + 0.3], target: [tx, ty, groundZ(tx, ty)], speed: 6, low: true };
+  }
+  if (done) {
+    const Lp = flyPoint(1), P = flyPoint(0.9);
+    const dx = Lp[0] - P[0], dy = Lp[1] - P[1], l = Math.hypot(dx, dy) || 1;
+    return { eye: [Lp[0] - (dx / l) * 16, Lp[1] - (dy / l) * 16, Lp[2] + 8], target: Lp, speed: 2.2 };
+  }
+  const p = flyPoint(e), q = flyPoint(Math.min(1, e + 0.08)), b = flyPoint(Math.max(0, e - 0.03));
+  const dx = q[0] - b[0], dy = q[1] - b[1], l = Math.hypot(dx, dy) || 1;
+  return { eye: [b[0] - (dx / l) * 5, b[1] - (dy / l) * 5, Math.max(b[2], p[2]) + 2.4], target: [q[0], q[1], q[2]], speed: 7 };
 }
 
 function render3D(dt) {
+  {
+    const fb = $('#flyBtn');
+    const want = U.screen === 'play' && U.phase === 'aim' && !U.anims.length && !!U.preview;
+    if (fb.hidden === want) fb.hidden = !want;
+    const label = CLUBS[U.club].putter ? 'Read' : 'Fly';
+    if (fb.textContent !== label) fb.textContent = label;
+  }
   if (!U.cam3) updateCamera3D(0);
   if (V3.hole !== hole) V3.setHole(hole, R, R.palette);
   // Repaint a sharp patch of course around the ball the camera is behind.
@@ -1706,6 +1820,7 @@ function render3D(dt) {
   const multi = G.players.length > 1;
   const vp = viewport();
   const scene = { cam: { ...U.cam3, insetTop: vp.top, insetBottom: vp.h - vp.bot }, time: U.time, wind, balls: [], trails: [], particles: R.particles, aim: null, flagColor: flagColor() };
+  scene.pinOut = (U.phase === 'aim' && !!CLUBS[U.club].putter) || U.anims.some((x) => CLUBS[x.input.club].putter);
   const labels = [];
   G.players.forEach((p, i) => {
     if (animFor(i) || p.holed || p.h !== G.h) return;
@@ -1750,6 +1865,18 @@ function render3D(dt) {
       labels.push({ x: fr[lf].x, y: fr[lf].y, text: `${Math.round(U.target)}`, tag: true });
     }
   }
+  if (U.fly && !U.fly.putt) {
+    // The ghost ball flying the line, and the verdict when it gets there.
+    const e = flyProgress(), p = flyPoint(e), pv = U.fly.pv;
+    if (U.fly.t > U.fly.lead) scene.balls.push({ x: p[0], y: p[1], z: 0, zAbs: p[2], col: [1, 1, 1, 0.75] });
+    if (pv.treeHit) labels.push({ x: pv.treeHit.x, y: pv.treeHit.y, z: pv.treeHit.z + 1.2, text: 'Tree!', color: 'rgba(215,45,45,0.92)' });
+    if (!U.fly.said && U.fly.t > U.fly.lead + U.fly.travel) {
+      U.fly.said = true;
+      if (pv.treeHit) popup(`Hits a tree at ${Math.round(pv.treeHit.d)} yd`, '#ff9a8a', 1.1, 24);
+      else if (pv.outcome === 'water') popup('Finds the water', '#ff9a8a', 1.1, 24);
+      else popup('Clear line ✓', '#bff5a8', 1.1, 24);
+    }
+  }
   scene.slope = (ball.lie === T.GREEN || ball.lie === T.FRINGE || (U.phase === 'aim' && CLUBS[U.club].putter)) && toPin(hole, ball) < 30;
   drawSide();
   V3.draw(scene);
@@ -1766,7 +1893,7 @@ function render3D(dt) {
     ctx.fillRect(0, 0, w, h);
   }
   for (const l of labels) {
-    const p = V3.project(l.x, l.y, groundZ(l.x, l.y) + (l.tag ? 0 : 0.3));
+    const p = V3.project(l.x, l.y, l.z != null ? l.z : groundZ(l.x, l.y) + (l.tag ? 0 : 0.3));
     if (!p) continue;
     ctx.font = '800 13px "Nunito", ui-rounded, system-ui, sans-serif';
     const w = ctx.measureText(l.text).width + 12;
@@ -2485,6 +2612,10 @@ $('#shapeBtn').addEventListener('click', () => {
 $('#sideBtn').addEventListener('click', () => {
   U.sidePinned = !U.sidePinned;
   sound.click();
+});
+$('#flyBtn').addEventListener('click', () => {
+  sound.click();
+  startFly();
 });
 $('#viewBtn').addEventListener('click', () => {
   store.set('view3d', !store.get('view3d', true));
