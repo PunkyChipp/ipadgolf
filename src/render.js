@@ -1,8 +1,8 @@
 // Drawing. The course is painted once per hole into offscreen canvases (one
 // for the whole hole, one sharper one around the green); each frame draws
 // those through a rotating, zooming camera and adds balls, flag and effects.
-import { T, inEllipse, rng, hashSeed } from './course.js?v=10';
-import { CUP_R } from './sim.js?v=10';
+import { T, inEllipse, rng, hashSeed } from './course.js?v=12';
+import { CUP_R } from './sim.js?v=12';
 
 const PX = 3; // pixels per yard for the whole-hole layer
 const PXG = 16; // pixels per yard for the green layer
