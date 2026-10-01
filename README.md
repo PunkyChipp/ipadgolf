@@ -1,11 +1,12 @@
 # Pocket Links
 
-A golf game for the browser, built for iPad, with two courses: the nine-hole Pocket Links and an 18-hole Augusta National. It has real clubs you can choose, wind, lies, sloping and tiered greens, a three-tap swing meter that is hard to master, and a short game where you pick the landing spot and see the roll-out. You can play alone, with up to 4 players on one iPad, or with up to 4 iPads over the internet.
+A golf game for the browser, built for iPad, with five courses: Pocket Links, an 18-hole Augusta National, St Andrews, Pebble Beach and TPC Sawgrass. It has real clubs you can choose, wind, lies, sloping and tiered greens, a three-tap swing meter that is hard to master, and a short game where you pick the landing spot and see the roll-out. You can play alone, with up to 4 players on one iPad, or with up to 4 iPads over the internet.
 
 No build step and no dependencies: plain HTML, CSS and JavaScript modules.
 
 ## How to play
 
+- **3D view:** you play from behind the ball, like a TV broadcast. Each hole opens with a flyover (tap to skip). Before you swing you see the flight arc in the air, the landing ring and the roll-out. In flight the camera chases the ball, then cuts to a camera beyond the landing area for long shots, with a glowing tracer. Putts that drop go into slow motion. The course is real terrain: fairways and greens play flat, while the land rolls into hills around each hole, bunkers sit in hollows and tees stand proud, all lit by the sun. Grass, rough and sand have fine detail up close; water reflects the sky with moving ripples and glints; trees are painted leaf by leaf; and distant tree lines ring the horizon under a sky with real clouds. Every course has its own light: spring sun at Augusta, grey sea skies at St Andrews, a golden sunset at Pebble Beach. *2D* switches to the classic top-down view (also used if the device has no WebGL), and *Map* shows the whole hole.
 - **Aim:** drag on the course to where you want the ball to land. The ring is the landing spot, with its yardage. The dotted trail after it shows the roll-out, ending where the ball should stop (no wind, pure strike). The arrow buttons give fine aim. The guide turns red if the shot finds trees, water or out of bounds.
 - **Swing:** three taps on the meter.
   1. Tap to start.
@@ -77,6 +78,18 @@ Inspired by the Masters course, with yardages scaled to the game's clubs. Tall p
 | 17 | Nandina | 4 | Bunkers short of the green |
 | 18 | Holly | 4 | Uphill through a chute of trees |
 
+### St Andrews (9 holes, par 37)
+
+Nine famous holes of the Old Course: Burn, Dyke, Hole O'Cross, High, Heathery, Long (with Hell bunker), Corner of the Dyke, Road and Tom Morris (Valley of Sin, Swilcan Bridge). No trees, just gorse, huge greens, deep pot bunkers, firm fairways that let the ball run, and half as much wind again.
+
+### Pebble Beach (9 holes, par 35)
+
+Clifftop holes beside the Pacific: Stillwater Cove, Ocean Rise, The Hill, The Little Seventh (a wedge to a green surrounded by sea), The Chasm, Carmel Bay, Cliff Edge, Hourglass and The Cypress Finish, with the ocean down the left. Windier than inland courses.
+
+### TPC Sawgrass (9 holes, par 36)
+
+Stadium golf with water on nearly every hole, sandy waste areas and palms: Lagoon, Waste Area, Long Iron, Long Ninth, Risk and Reward, Pond Thirteen, Sixteen, Island Green and The Finisher.
+
 Pin positions and wind change every game.
 
 ## Playing together
@@ -106,6 +119,10 @@ The game needs to be served over the web. GitHub Pages is free:
 
 If there's no sound, check the iPad's silent switch or mode.
 
+## Releasing an update
+
+Every file the game loads carries a version stamp (`?v=8`). Before publishing changes, run `npm run bump`. That raises the stamp everywhere and in `version.json`, so iPads can never mix new and old files. An open copy of the game also notices the new `version.json` and reloads itself the next time it is on the title screen.
+
 ## Running it locally
 
 ```sh
@@ -119,7 +136,8 @@ Opening `index.html` straight from the file system won't work, because browsers 
 
 - `src/course.js`: the courses, holes and terrain (fairway, rough, bunkers, water, trees, green slopes and tiers). No browser code.
 - `src/sim.js`: clubs, equipment, ball flight, wind, spin, bounces, roll and putting. Deterministic, so every iPad replays a shot identically.
-- `src/render.js`: draws the course, balls, flag and effects through a rotating, zooming camera.
+- `src/render.js`: paints the course and draws the top-down 2D view.
+- `src/view3d.js`: the WebGL 3D view: the painted course as the ground, billboard trees, sky, tracer, flight arc and the camera maths.
 - `src/game.js`: turns, the swing meter, scoring, menus and saving.
 - `src/net.js`: the online link.
 - `src/audio.js`: sound effects, generated in code.

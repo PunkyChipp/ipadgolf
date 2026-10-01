@@ -67,6 +67,7 @@ export class Sound {
     g.gain.linearRampToValueAtTime(vol, t + attack);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     src.connect(f).connect(g).connect(this.out);
+    src.loop = true; // the noise buffer is 2 s; long sounds loop it
     src.start(t, Math.random() * 1.5);
     src.stop(t + dur + 0.05);
   }
@@ -145,6 +146,11 @@ export class Sound {
     if (level >= 2) this.noise({ dur: 1.2, vol: 0.06, freq: 900, q: 0.4, at: 0.4, attack: 0.3 });
   }
 
+  // The swing through the air: a quick rising rush, louder for big swings.
+  whoosh(power = 1) {
+    this.noise({ dur: 0.22, vol: 0.05 + Math.min(1, power) * 0.07, freq: 500, freq2: 2600, q: 0.8, attack: 0.12 });
+  }
+
   // A gallery roar that swells and fades: bigger for better shots.
   roar(level = 1) {
     if (!this.ready) return;
@@ -159,9 +165,40 @@ export class Sound {
     this.noise({ dur: 0.9, vol: 0.05, freq: 350, freq2: 220, q: 2, at: 0.3, attack: 0.2 });
   }
 
-  // Occasional birdsong while playing.
+  // Each course sounds different: waves at Pebble Beach, gusting sea wind at
+  // St Andrews, a distant gallery at Augusta and Sawgrass.
+  setScene(course) {
+    this.scene = course;
+    this.sceneTimer = 1.5;
+  }
+
+  sceneSound() {
+    switch (this.scene) {
+      case 'pebble':
+        this.noise({ dur: 5, vol: 0.06, freq: 520, freq2: 220, q: 0.6, type: 'lowpass', attack: 1.6 });
+        this.noise({ dur: 2.6, vol: 0.025, freq: 2600, freq2: 1200, q: 0.5, at: 1.4, attack: 0.5 });
+        return 6 + Math.random() * 4;
+      case 'standrews':
+        this.noise({ dur: 6, vol: 0.05, freq: 380 + Math.random() * 200, freq2: 300, q: 0.5, attack: 2.4 });
+        if (Math.random() < 0.4) this.tone({ f: 1250, f2: 820, dur: 0.35, type: 'triangle', vol: 0.03, at: 1 });
+        return 5 + Math.random() * 5;
+      case 'augusta':
+      case 'sawgrass':
+        this.noise({ dur: 3.2, vol: 0.016, freq: 700, q: 0.7, attack: 1 });
+        if (Math.random() < 0.3) this.applause(0);
+        return 14 + Math.random() * 12;
+      default:
+        return 999;
+    }
+  }
+
+  // Occasional birdsong while playing, plus the course's own sounds.
   ambient(dt) {
     if (!this.ready) return;
+    if (this.scene) {
+      this.sceneTimer = (this.sceneTimer ?? 1) - dt;
+      if (this.sceneTimer <= 0) this.sceneTimer = this.sceneSound();
+    }
     this.birdTimer -= dt;
     if (this.birdTimer > 0) return;
     this.birdTimer = 7 + Math.random() * 12;

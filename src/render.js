@@ -1,8 +1,8 @@
 // Drawing. The course is painted once per hole into offscreen canvases (one
 // for the whole hole, one sharper one around the green); each frame draws
 // those through a rotating, zooming camera and adds balls, flag and effects.
-import { T, inEllipse, rng, hashSeed } from './course.js';
-import { CUP_R } from './sim.js';
+import { T, inEllipse, rng, hashSeed } from './course.js?v=10';
+import { CUP_R } from './sim.js?v=10';
 
 const PX = 3; // pixels per yard for the whole-hole layer
 const PXG = 16; // pixels per yard for the green layer
@@ -37,6 +37,23 @@ const AUGUSTA_C = {
   sandDark: '#d8d2c1',
   tee: '#7fc962',
 };
+// St Andrews: golden fescue rough, gorse, pale firm fairways.
+const STANDREWS_C = {
+  ...LINKS_C,
+  ob: '#61783f',
+  deep: '#5d7438',
+  rough: '#93a95c',
+  fairway: '#82bf5e',
+  fairwayStripe: 'rgba(255,255,255,0.06)',
+  fringe: '#88c460',
+  green: '#8bcf66',
+  sand: '#dcc897',
+  sandDark: '#a88e5a',
+  tee: '#8bc765',
+};
+const PEBBLE_C = { ...LINKS_C, ob: '#3c6b34', deep: '#4b8a3d', rough: '#5aa045', fairway: '#6cb850', sand: '#efe0b6' };
+const SAWGRASS_C = { ...LINKS_C, ob: '#2f5d2c', deep: '#447f36', rough: '#55993f', fairway: '#66b64d', sand: '#f1e6c4', sandDark: '#cdbd8f' };
+const PALETTES = { augusta: AUGUSTA_C, standrews: STANDREWS_C, pebble: PEBBLE_C, sawgrass: SAWGRASS_C };
 let C = LINKS_C;
 
 function ellipsePath(ctx, e, grow = 0) {
@@ -82,7 +99,7 @@ export class Renderer {
 
   setHole(hole) {
     this.hole = hole;
-    C = hole.course === 'augusta' ? AUGUSTA_C : LINKS_C;
+    C = PALETTES[hole.course] || LINKS_C;
     const pad = hole.bounds + 45;
     const xs = hole.path.map((p) => p.x), ys = hole.path.map((p) => p.y);
     const box = { x: Math.min(...xs) - pad, y: Math.min(...ys) - pad };
@@ -107,7 +124,7 @@ export class Renderer {
   }
 
   // Paint the course into a canvas covering `box` (world yards) at `px` px/yd.
-  paint(box, px) {
+  paint(box, px, { markers = true } = {}) {
     const hole = this.hole;
     const cv = document.createElement('canvas');
     cv.width = Math.ceil(box.w * px);
@@ -178,39 +195,17 @@ export class Renderer {
     c.fillStyle = 'rgba(255,255,255,0.08)';
     for (let i = -t.ry; i < t.ry; i += 2.4) c.fillRect(-t.rx, i, t.rx * 2, 1.2);
     c.restore();
-    for (const k of [-1, 1]) {
+    for (const k of markers ? [-1, 1] : []) {
       const mx = t.x + Math.cos(t.ang + Math.PI / 2) * 3 * k, my = t.y + Math.sin(t.ang + Math.PI / 2) * 3 * k;
       c.fillStyle = 'rgba(0,0,0,0.25)';
       c.beginPath();
-      c.arc(mx + 0.15, my + 0.2, 0.45, 0, TAU);
+      c.arc(mx + 0.12, my + 0.15, 0.3, 0, TAU);
       c.fill();
-      c.fillStyle = '#f4f1e6';
+      c.fillStyle = hole.course === 'augusta' ? '#2e7d4f' : hole.course === 'standrews' ? '#c8323a' : '#f4f1e6';
       c.beginPath();
-      c.arc(mx, my, 0.45, 0, TAU);
+      c.arc(mx, my, 0.3, 0, TAU);
       c.fill();
     }
-
-    // Fringe and green with checkerboard mowing.
-    const g = hole.green;
-    ellipsePath(c, g, FRINGE_W);
-    c.fillStyle = C.fringe;
-    c.fill();
-    ellipsePath(c, g);
-    c.fillStyle = C.green;
-    c.fill();
-    c.save();
-    ellipsePath(c, g);
-    c.clip();
-    c.translate(g.x, g.y);
-    c.rotate((g.rot || 0) + 0.5);
-    c.fillStyle = 'rgba(255,255,255,0.06)';
-    const R = Math.max(g.rx, g.ry) + 2;
-    for (let y = -R; y < R; y += 3) for (let x = -R; x < R; x += 3) if (((x + y) / 3) & 1) c.fillRect(x, y, 3, 3);
-    c.restore();
-    ellipsePath(c, g);
-    c.strokeStyle = 'rgba(40,90,30,0.25)';
-    c.lineWidth = 0.25;
-    c.stroke();
 
     // Water: ellipses and creeks.
     for (const w of hole.water) {
@@ -236,6 +231,39 @@ export class Renderer {
         c.setLineDash([3, 5]);
         shape();
         c.stroke();
+      } else if (w.sea) {
+        // The ocean: a rocky cliff edge, deep blue water and a line of surf.
+        ellipsePath(c, w, 3.2);
+        c.fillStyle = '#8c8272';
+        c.fill();
+        ellipsePath(c, w, 1.6);
+        c.fillStyle = '#a99f8c';
+        c.fill();
+        shape();
+        const gr = c.createRadialGradient(w.x, w.y, 0, w.x, w.y, Math.max(w.rx, w.ry));
+        gr.addColorStop(0, '#174f7a');
+        gr.addColorStop(0.7, '#1f6a9c');
+        gr.addColorStop(1, '#3a93bf');
+        c.fillStyle = gr;
+        c.fill();
+        c.clip();
+        c.strokeStyle = 'rgba(255,255,255,0.75)';
+        c.lineWidth = 1.1;
+        ellipsePath(c, w, -0.6);
+        c.stroke();
+        c.strokeStyle = 'rgba(255,255,255,0.3)';
+        c.lineWidth = 0.6;
+        ellipsePath(c, w, -2.4);
+        c.stroke();
+        c.strokeStyle = 'rgba(255,255,255,0.12)';
+        c.lineWidth = 0.4;
+        for (let i = 0; i < 30; i++) {
+          const ax = w.x + (r() - 0.5) * w.rx * 1.6, ay = w.y + (r() - 0.5) * w.ry * 1.6;
+          c.beginPath();
+          c.moveTo(ax, ay);
+          c.quadraticCurveTo(ax + 3, ay - 0.8, ax + 6, ay);
+          c.stroke();
+        }
       } else {
         ellipsePath(c, w, 1.2);
         c.fillStyle = 'rgba(30,60,20,0.45)';
@@ -264,6 +292,28 @@ export class Renderer {
       c.restore();
     }
 
+    // Fringe and green with checkerboard mowing (after water, so island greens show).
+    const g = hole.green;
+    ellipsePath(c, g, FRINGE_W);
+    c.fillStyle = C.fringe;
+    c.fill();
+    ellipsePath(c, g);
+    c.fillStyle = C.green;
+    c.fill();
+    c.save();
+    ellipsePath(c, g);
+    c.clip();
+    c.translate(g.x, g.y);
+    c.rotate((g.rot || 0) + 0.5);
+    c.fillStyle = 'rgba(255,255,255,0.06)';
+    const R = Math.max(g.rx, g.ry) + 2;
+    for (let y = -R; y < R; y += 3) for (let x = -R; x < R; x += 3) if (((x + y) / 3) & 1) c.fillRect(x, y, 3, 3);
+    c.restore();
+    ellipsePath(c, g);
+    c.strokeStyle = 'rgba(40,90,30,0.25)';
+    c.lineWidth = 0.25;
+    c.stroke();
+
     // Stone footbridges over the creeks.
     for (const br of hole.bridges) {
       c.save();
@@ -281,8 +331,10 @@ export class Renderer {
 
     // Bunkers: sand with a shaded lip.
     for (const b of hole.bunkers) {
-      ellipsePath(c, b, 0.6);
-      c.fillStyle = 'rgba(60,90,40,0.5)';
+      // Small bunkers are deep pots with a dark, revetted face.
+      const pot = Math.max(b.rx, b.ry) < 4.2;
+      ellipsePath(c, b, pot ? 1 : 0.6);
+      c.fillStyle = pot ? 'rgba(40,55,25,0.85)' : 'rgba(60,90,40,0.5)';
       c.fill();
       ellipsePath(c, b);
       c.fillStyle = C.sand;
@@ -320,6 +372,30 @@ export class Renderer {
         c.fillRect(x + 0.1, y + 0.1, 0.5, 0.5);
         c.fillStyle = '#f7f7f2';
         c.fillRect(x - 0.25, y - 0.25, 0.5, 0.5);
+      }
+    }
+
+    // Gorse: dense bushes with yellow flowers across the links' deep rough.
+    if (hole.style === 'gorse') {
+      const step = 3.4;
+      for (let y = box.y; y < box.y + box.h; y += step) {
+        for (let x = box.x; x < box.x + box.w; x += step) {
+          const gx = x + (r() - 0.5) * step, gy = y + (r() - 0.5) * step;
+          const roll = r();
+          const t = hole.terrainAt(gx, gy);
+          if ((t !== T.DEEP && t !== T.OB) || roll > (t === T.DEEP ? 0.55 : 0.75)) continue;
+          const br = 1.1 + r() * 1.3;
+          c.fillStyle = 'rgba(0,0,0,0.22)';
+          c.beginPath();
+          c.arc(gx + 0.5, gy + 0.6, br, 0, TAU);
+          c.fill();
+          c.fillStyle = r() < 0.5 ? '#3d5a29' : '#46672e';
+          c.beginPath();
+          c.arc(gx, gy, br, 0, TAU);
+          c.fill();
+          c.fillStyle = '#e9cf3a';
+          for (let k = 0; k < 4; k++) c.fillRect(gx + (r() - 0.5) * br * 1.4, gy + (r() - 0.5) * br * 1.4, 0.35, 0.35);
+        }
       }
     }
 
@@ -369,6 +445,66 @@ export class Renderer {
     }
     trees.sort((a, b) => a.y - b.y);
     for (const tr of trees) drawTree(c, tr);
+    return cv;
+  }
+
+  // A plain map of surfaces for the 3D view (no decoration): red = rough
+  // (dim) or sand (bright), green = short grass (fairway, tee, fringe, green),
+  // blue = water.
+  paintMask(box, px) {
+    const hole = this.hole;
+    const cv = document.createElement('canvas');
+    cv.width = Math.ceil(box.w * px);
+    cv.height = Math.ceil(box.h * px);
+    const c = cv.getContext('2d');
+    c.setTransform(px, 0, 0, px, -box.x * px, -box.y * px);
+    const P = hole.path;
+    c.fillStyle = '#000';
+    c.fillRect(box.x, box.y, box.w, box.h);
+    const discs = (from, to, extra) => {
+      c.beginPath();
+      for (const p of P) {
+        if (p.s < from || p.s > to) continue;
+        const rr = hole.halfWidth(p.s) + extra;
+        c.moveTo(p.x + rr, p.y);
+        c.arc(p.x, p.y, rr, 0, TAU);
+      }
+    };
+    discs(0, Infinity, hole.roughW);
+    c.fillStyle = 'rgb(70,0,0)';
+    c.fill('nonzero');
+    if (hole.fwFrom < hole.fwTo) {
+      discs(hole.fwFrom, hole.fwTo, 0);
+      c.fillStyle = 'rgb(70,255,0)';
+      c.fill('nonzero');
+    }
+    const t = hole.tee;
+    c.save();
+    c.translate(t.x, t.y);
+    c.rotate(t.rot);
+    c.fillStyle = 'rgb(70,255,0)';
+    c.fillRect(-t.rx, -t.ry, t.rx * 2, t.ry * 2);
+    c.restore();
+    c.fillStyle = c.strokeStyle = 'rgb(0,0,255)';
+    c.lineCap = 'round';
+    for (const w of hole.water) {
+      if (w.line) {
+        linePath(c, w.line);
+        c.lineWidth = w.w;
+        c.stroke();
+      } else {
+        ellipsePath(c, w);
+        c.fill();
+      }
+    }
+    ellipsePath(c, hole.green, FRINGE_W);
+    c.fillStyle = 'rgb(70,255,0)';
+    c.fill();
+    c.fillStyle = 'rgb(255,0,0)';
+    for (const b of hole.bunkers) {
+      ellipsePath(c, b);
+      c.fill();
+    }
     return cv;
   }
 
@@ -669,11 +805,33 @@ export class Renderer {
     this.particles.push({ x, y, r0, r1, color, life, max: life, ring: true });
   }
 
+  // Particle physics, shared by the top-down and 3D views.
+  stepParticles(dt) {
+    for (const p of this.particles) {
+      p.life -= dt;
+      if (p.ring) continue;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vz -= 12 * dt;
+      p.z = Math.max(0, p.z + p.vz * dt);
+    }
+    this.particles = this.particles.filter((p) => p.life > 0);
+  }
+
+  get palette() {
+    return C;
+  }
+
+  // In 3D the 2D canvas is a transparent overlay for labels and popups.
+  clearOverlay() {
+    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.ctx.clearRect(0, 0, this.cv.width, this.cv.height);
+  }
+
   drawParticles(dt, scale) {
     const ctx = this.ctx;
     const px = 1 / scale;
     for (const p of this.particles) {
-      p.life -= dt;
       const f = Math.max(0, p.life / p.max);
       ctx.globalAlpha = f;
       if (p.ring) {
@@ -683,10 +841,6 @@ export class Renderer {
         ctx.arc(p.x, p.y, p.r1 + (p.r0 - p.r1) * f, 0, TAU);
         ctx.stroke();
       } else {
-        p.x += p.vx * dt;
-        p.y += p.vy * dt;
-        p.vz -= 12 * dt;
-        p.z = Math.max(0, p.z + p.vz * dt);
         ctx.fillStyle = p.color;
         ctx.beginPath();
         ctx.arc(p.x, p.y - p.z * 0.3, Math.max(p.size, 1.2 * px), 0, TAU);
@@ -694,7 +848,6 @@ export class Renderer {
       }
     }
     ctx.globalAlpha = 1;
-    this.particles = this.particles.filter((p) => p.life > 0);
   }
 }
 
@@ -719,6 +872,8 @@ function roundRect(c, x, y, w, h, r) {
 
 function drawTree(c, t) {
   if (t.pine) return drawPine(c, t);
+  if (t.palm) return drawPalm(c, t);
+  if (t.cypress) return drawCypress(c, t);
   const pal = t.shade < 0.33 ? ['#1d4a22', '#2b6a2f', '#3f8a3c'] : t.shade < 0.66 ? ['#224f1f', '#32712c', '#4b923a'] : ['#1a4630', '#27664a', '#3a8660'];
   const r = t.r;
   c.fillStyle = pal[0];
@@ -759,5 +914,43 @@ function drawPine(c, t) {
     }
     c.closePath();
     c.fill();
+  }
+}
+
+// Palms from above: a fan of fronds around a small crown.
+function drawPalm(c, t) {
+  const r = t.r;
+  const n = 8;
+  c.lineCap = 'round';
+  for (let k = 0; k < n; k++) {
+    const a = t.shade * 6 + (k * TAU) / n;
+    const ex = t.x + Math.cos(a) * r, ey = t.y + Math.sin(a) * r;
+    const mx = t.x + Math.cos(a + 0.25) * r * 0.55, my = t.y + Math.sin(a + 0.25) * r * 0.55;
+    c.strokeStyle = k % 2 ? '#2f7a34' : '#3f9440';
+    c.lineWidth = r * 0.32;
+    c.beginPath();
+    c.moveTo(t.x, t.y);
+    c.quadraticCurveTo(mx, my, ex, ey);
+    c.stroke();
+  }
+  c.fillStyle = '#6b5233';
+  c.beginPath();
+  c.arc(t.x, t.y, r * 0.18, 0, TAU);
+  c.fill();
+}
+
+// Monterey cypress: flat, windswept layers of dark foliage.
+function drawCypress(c, t) {
+  const r = t.r;
+  const pal = ['#1c3d2a', '#26503a', '#346648'];
+  for (let layer = 0; layer < 3; layer++) {
+    c.fillStyle = pal[layer];
+    for (let k = 0; k < 4; k++) {
+      const a = t.shade * 5 + k * 1.7 + layer;
+      const d = r * (0.42 - layer * 0.1);
+      c.beginPath();
+      c.ellipse(t.x + Math.cos(a) * d - layer * r * 0.08, t.y + Math.sin(a) * d - layer * r * 0.1, r * (0.62 - layer * 0.12), r * (0.42 - layer * 0.08), a, 0, TAU);
+      c.fill();
+    }
   }
 }
