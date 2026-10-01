@@ -547,6 +547,7 @@ function loadHoleView() {
   wind = windFor(G.holes[G.h], G.seed);
   R.setHole(hole);
   V3.setHole(hole, R, R.palette);
+  sound.setScene(hole.course);
   updateHud();
 }
 
@@ -662,9 +663,9 @@ function stepAnims(dt) {
 function stepAnim(a, dt) {
   const frames = a.res.frames;
   if (a.i < frames.length - 1) {
-    // Slow motion for the last moments of a ball that's going in.
+    // Slow motion for the last moments of a ball that's going in (and all of a replay).
     const slow = a.res.outcome === 'holed' && frames.length - 1 - a.i < 50 && frames.length > 70;
-    a.t += slow ? dt * 0.38 : dt;
+    a.t += (slow ? dt * 0.38 : dt) * (a.replay ? 0.6 : 1);
     a.i = Math.min(frames.length - 1, Math.floor(a.t * 60));
     const f = frames[a.i];
     a.trail.push({ x: f.x, y: f.y, z: f.z });
@@ -677,10 +678,25 @@ function stepAnim(a, dt) {
     return;
   }
   if (a.trail.length) a.trail.shift();
-  if (a.hold === 0) finishShotFx(a);
+  if (a.hold === 0) {
+    if (a.replay) sound.cup();
+    else finishShotFx(a);
+  }
   a.hold += dt;
   if (a.hold > (a.res.outcome === 'holed' ? 1.8 : 1.1)) {
     U.anims = U.anims.filter((x) => x !== a);
+    if (a.replay) {
+      if (U.pendingCard && !U.anims.length) {
+        U.pendingCard = false;
+        showCard();
+      } else refreshPhase();
+      return;
+    }
+    // A shot worth seeing again gets a broadcast replay from behind the cup.
+    if (worthReplay(a)) {
+      U.anims.push({ ...a, replay: true, t: 0, i: 0, hold: 0, trail: [], cut: false, res: { ...a.res, events: a.res.events.map((e) => ({ ...e, done: false })) } });
+      popup('Replay', '#ffffff', 1.6, 22, true);
+    }
     const prevH = G.h;
     if (G.players[a.p].shots === a.k) G = applyShot(G, a.p, a.input, a.res);
     save();
@@ -691,6 +707,13 @@ function stepAnim(a, dt) {
       showCard();
     } else refreshPhase();
   }
+}
+
+function worthReplay(a) {
+  if (a.replay || a.res.outcome !== 'holed' || !use3D() || !isLocal(a.p)) return false;
+  const s0 = a.res.frames[0];
+  const from = Math.hypot(s0.x - hole.pin.x, s0.y - hole.pin.y);
+  return CLUBS[a.input.club].putter ? from >= 8 : from > 4;
 }
 
 function fireEvent(ev, a) {
@@ -1587,6 +1610,13 @@ function camera3DTarget() {
 function chaseCam(a) {
   const fr = a.res.frames;
   const f = fr[Math.min(a.i, fr.length - 1)];
+  if (a.replay) {
+    // The cup cam: low behind the hole, looking back up the line of the ball.
+    const s0 = fr[0];
+    const ux = hole.pin.x - s0.x, uy = hole.pin.y - s0.y, ul = Math.hypot(ux, uy) || 1;
+    const back = Math.min(5, 1.5 + ul * 0.08);
+    return { eye: [hole.pin.x + (ux / ul) * back - (uy / ul) * 0.6, hole.pin.y + (uy / ul) * back + (ux / ul) * 0.6, 0.45 + back * 0.08], target: [f.x, f.y, f.z * 0.9 + 0.05], speed: a.i < 3 ? 0 : 6 };
+  }
   const club = CLUBS[a.input.club];
   const [dx, dy] = d2(a.input.aim);
   if (club.putter) return { eye: [f.x - dx * 3, f.y - dy * 3, 1.15], target: [f.x + dx * 3, f.y + dy * 3, 0], speed: 4 };
@@ -1635,9 +1665,8 @@ function render3D(dt) {
     V3.setNear(R.paint(box, 9), box);
   }
   const multi = G.players.length > 1;
-  const panel = $('#panel');
-  const insetBottom = panel.hidden ? 0 : panel.getBoundingClientRect().height;
-  const scene = { cam: { ...U.cam3, insetTop: 62, insetBottom }, time: U.time, wind, balls: [], trails: [], particles: R.particles, aim: null, flagColor: flagColor() };
+  const vp = viewport();
+  const scene = { cam: { ...U.cam3, insetTop: vp.top, insetBottom: vp.h - vp.bot }, time: U.time, wind, balls: [], trails: [], particles: R.particles, aim: null, flagColor: flagColor() };
   const labels = [];
   G.players.forEach((p, i) => {
     if (animFor(i) || p.holed || p.h !== G.h) return;
@@ -1702,6 +1731,18 @@ function render3D(dt) {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillText(l.text, x + 6, y + 10.5);
+  }
+  if (U.anims.some((x) => x.replay)) {
+    ctx.font = '400 22px "Lilita One", ui-rounded, system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(200,30,40,0.9)';
+    ctx.beginPath();
+    const top = viewport().top + 12;
+    ctx.roundRect ? ctx.roundRect(16, top, 118, 34, 8) : ctx.rect(16, top, 118, 34);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('▶ REPLAY', 26, top + 18);
   }
   drawPopups(dt);
   drawMeter();
@@ -2221,6 +2262,14 @@ canvas.addEventListener('pointerdown', (e) => {
     U.pinch = { d: pinchDist(), z: U.zoom };
     return;
   }
+  // Tap during a replay to skip it.
+  const rep = U.anims.find((x) => x.replay);
+  if (U.screen === 'play' && rep) {
+    rep.i = rep.res.frames.length - 1;
+    rep.t = rep.i / 60;
+    rep.hold = 0.01;
+    return;
+  }
   // Tap during the flyover to skip it.
   if (U.screen === 'play' && U.phase === 'intro' && U.introT > 0.6) {
     U.introT = 0.01;
@@ -2601,6 +2650,7 @@ window.__pl = {
   V3,
   targetMeter: () => targetPower() / meterScale(),
   shoot: () => takeShot(targetPower(), 0),
+  updatePreview,
   setBall: (x, y, lie) => { G.players[me()].ball = { x, y, lie }; U.aimFor = ''; refreshPhase(); },
 };
 

@@ -199,11 +199,11 @@ export class Renderer {
       const mx = t.x + Math.cos(t.ang + Math.PI / 2) * 3 * k, my = t.y + Math.sin(t.ang + Math.PI / 2) * 3 * k;
       c.fillStyle = 'rgba(0,0,0,0.25)';
       c.beginPath();
-      c.arc(mx + 0.15, my + 0.2, 0.45, 0, TAU);
+      c.arc(mx + 0.12, my + 0.15, 0.3, 0, TAU);
       c.fill();
-      c.fillStyle = '#f4f1e6';
+      c.fillStyle = hole.course === 'augusta' ? '#2e7d4f' : hole.course === 'standrews' ? '#c8323a' : '#f4f1e6';
       c.beginPath();
-      c.arc(mx, my, 0.45, 0, TAU);
+      c.arc(mx, my, 0.3, 0, TAU);
       c.fill();
     }
 
