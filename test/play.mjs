@@ -47,10 +47,13 @@ function pickShot(hole, ball, wind) {
 
 function putt(hole, ball, dist) {
   // A good putter: search aim and pace for the best simulated result.
-  const scale = suggestPuttScale(dist);
+  // Like a player switching range, try the suggested range and the next one
+  // up (uphill putts over a tier need more pace than the distance suggests).
+  const first = PUTT_SCALES.indexOf(suggestPuttScale(dist));
+  const scales = PUTT_SCALES.slice(first, first + 2);
   const base = Math.atan2(hole.pin.y - ball.y, hole.pin.x - ball.x);
   let best = null;
-  for (let da = -0.2; da <= 0.2; da += 0.02) {
+  for (const scale of scales) for (let da = -0.2; da <= 0.2; da += 0.02) {
     for (let p = 0.05; p <= 1; p += 0.05) {
       const input = { club: PUTTER, aim: base + da, power: p, acc: 0, puttScale: scale };
       const r = simulateShot(hole, ball, input, { speed: 0, dir: 0 }, 1);
@@ -80,6 +83,21 @@ function playHole(h, skill, r) {
     if (res.outcome === 'holed') break;
   }
   return { strokes, log, hole };
+}
+
+// Every file must load the same version of the others, or an iPad could mix
+// a new page with old cached scripts.
+{
+  const { readFileSync, readdirSync } = await import('node:fs');
+  const want = JSON.parse(readFileSync('version.json', 'utf8')).v;
+  const files = ['index.html', 'sw.js', ...readdirSync('src').filter((f) => f.endsWith('.js')).map((f) => `src/${f}`)];
+  for (const f of files) {
+    const text = readFileSync(f, 'utf8');
+    for (const m of text.matchAll(/\?v=(\d+)/g)) if (m[1] !== want) throw new Error(`${f} loads version ${m[1]}, expected ${want}`);
+    // Local imports without a version stamp would bypass the cache-busting.
+    for (const m of text.matchAll(/from '(\.\/[^']+)'/g)) if (!m[1].includes('?v=')) throw new Error(`${f} imports ${m[1]} without ?v=`);
+  }
+  console.log(`version stamps ok (v${want})`);
 }
 
 // Determinism: identical inputs must give identical frames.

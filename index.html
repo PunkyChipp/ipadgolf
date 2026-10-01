@@ -16,7 +16,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;800&display=swap">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=8">
 </head>
 <body>
 <canvas id="game" aria-label="Golf hole. Drag on the course to aim."></canvas>
@@ -184,7 +184,7 @@
   <div class="panel wide">
     <h2>Choose a course</h2>
     <div id="courseList" class="course-list"></div>
-    <button id="btnCoursesDone" class="btn primary">Done</button>
+    <button id="btnCoursesDone" class="btn primary sticky-btn">Done</button>
   </div>
 </section>
 
@@ -193,7 +193,7 @@
     <h2>Your bag</h2>
     <p class="sub">Pick your clubs and ball. Every choice is a trade-off.</p>
     <div id="bagList" class="bag-list"></div>
-    <button id="btnBagDone" class="btn primary">Done</button>
+    <button id="btnBagDone" class="btn primary sticky-btn">Done</button>
   </div>
 </section>
 
@@ -276,7 +276,7 @@
       </div>
       <div>
         <h3>Courses</h3>
-        <p>Tap the course on the title screen to switch. <b>Augusta National</b> has 18 holes: tall pines, white sand, Rae's Creek at Amen Corner (11–13) and very fast, tiered greens. Play all 18 or either nine.</p>
+        <p>Tap the course on the title screen to switch. <b>Augusta National</b> (18 holes, or either nine): pines, white sand, Amen Corner and fast, tiered greens. <b>St Andrews</b>: no trees but gorse, deep pot bunkers, huge greens, firm ground that lets the ball run, and strong wind. <b>Pebble Beach</b>: clifftop holes with the Pacific beside you. <b>TPC Sawgrass</b>: water everywhere, palms and the island green.</p>
       </div>
       <div>
         <h3>Penalties</h3>
@@ -295,6 +295,6 @@
   </div>
 </section>
 
-<script type="module" src="src/game.js"></script>
+<script type="module" src="src/game.js?v=8"></script>
 </body>
 </html>

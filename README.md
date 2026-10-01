@@ -1,6 +1,6 @@
 # Pocket Links
 
-A golf game for the browser, built for iPad, with two courses: the nine-hole Pocket Links and an 18-hole Augusta National. It has real clubs you can choose, wind, lies, sloping and tiered greens, a three-tap swing meter that is hard to master, and a short game where you pick the landing spot and see the roll-out. You can play alone, with up to 4 players on one iPad, or with up to 4 iPads over the internet.
+A golf game for the browser, built for iPad, with five courses: Pocket Links, an 18-hole Augusta National, St Andrews, Pebble Beach and TPC Sawgrass. It has real clubs you can choose, wind, lies, sloping and tiered greens, a three-tap swing meter that is hard to master, and a short game where you pick the landing spot and see the roll-out. You can play alone, with up to 4 players on one iPad, or with up to 4 iPads over the internet.
 
 No build step and no dependencies: plain HTML, CSS and JavaScript modules.
 
@@ -77,6 +77,18 @@ Inspired by the Masters course, with yardages scaled to the game's clubs. Tall p
 | 17 | Nandina | 4 | Bunkers short of the green |
 | 18 | Holly | 4 | Uphill through a chute of trees |
 
+### St Andrews (9 holes, par 37)
+
+Nine famous holes of the Old Course: Burn, Dyke, Hole O'Cross, High, Heathery, Long (with Hell bunker), Corner of the Dyke, Road and Tom Morris (Valley of Sin, Swilcan Bridge). No trees, just gorse, huge greens, deep pot bunkers, firm fairways that let the ball run, and half as much wind again.
+
+### Pebble Beach (9 holes, par 35)
+
+Clifftop holes beside the Pacific: Stillwater Cove, Ocean Rise, The Hill, The Little Seventh (a wedge to a green surrounded by sea), The Chasm, Carmel Bay, Cliff Edge, Hourglass and The Cypress Finish, with the ocean down the left. Windier than inland courses.
+
+### TPC Sawgrass (9 holes, par 36)
+
+Stadium golf with water on nearly every hole, sandy waste areas and palms: Lagoon, Waste Area, Long Iron, Long Ninth, Risk and Reward, Pond Thirteen, Sixteen, Island Green and The Finisher.
+
 Pin positions and wind change every game.
 
 ## Playing together
@@ -105,6 +117,10 @@ The game needs to be served over the web. GitHub Pages is free:
 4. Open that link in Safari on each iPad and tap **Share → Add to Home Screen**. It then opens full screen like an app. Solo and same-iPad play also work offline after the first visit.
 
 If there's no sound, check the iPad's silent switch or mode.
+
+## Releasing an update
+
+Every file the game loads carries a version stamp (`?v=8`). Before publishing changes, run `npm run bump`. That raises the stamp everywhere and in `version.json`, so iPads can never mix new and old files. An open copy of the game also notices the new `version.json` and reloads itself the next time it is on the title screen.
 
 ## Running it locally
 

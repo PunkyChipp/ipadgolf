@@ -1,12 +1,15 @@
-import { buildHole as buildHoleRaw, windFor, HOLES, COURSES, courseOf, T, TERRAIN_NAMES } from './course.js';
+import { buildHole as buildHoleRaw, windFor, HOLES, COURSES, courseOf, T, TERRAIN_NAMES } from './course.js?v=8';
 import {
   simulateShot, CLUBS, PUTTER, PUTT_SCALES, SHAPES, FULL_SHAPES, SHORT_SHAPES, GEAR, GEAR_STATS, DEFAULT_GEAR, gearFor, MISHIT, meterWindow, lieEffect, suggestClub, suggestPuttScale, shotSeed, shotLabel, previewShot, flightParams, flightPoint,
-} from './sim.js';
-import { Renderer } from './render.js';
-import { Sound } from './audio.js';
-import { Link, makeCode, cleanCode } from './net.js';
+} from './sim.js?v=8';
+import { Renderer } from './render.js?v=8';
+import { Sound } from './audio.js?v=8';
+import { Link, makeCode, cleanCode } from './net.js?v=8';
 
 const $ = (s) => document.querySelector(s);
+
+// Every file is stamped with the same ?v= version (see tools/bump.mjs).
+const APP_VERSION = new URL(import.meta.url).searchParams.get('v') || 'dev';
 
 // Building a hole places its trees, which is slow, so each layout is built once.
 const holeCache = new Map();
@@ -355,7 +358,8 @@ function defaultTarget() {
   if (CLUBS[U.club].putter) return puttPlaysLike(ball);
   const full = clubCarry(U.club, ball.lie);
   if (dist > full + 45) return full;
-  let lo = 1.5, hi = full, best = full, bestD = Infinity;
+  // Full shots search proper swings only; short shots any length.
+  let lo = isShortGame(ball) ? 1.5 : full * 0.45, hi = full, best = full, bestD = Infinity;
   for (let i = 0; i < 11; i++) {
     const t = (lo + hi) / 2;
     const res = simulateShot(hole, ball, shotInput(t / full, 0), CALM, 1);
@@ -994,7 +998,7 @@ function drawMeter() {
   const scale = s.phase === 'idle' ? meterScale() : s.scale || 1;
   const full = clubCarry(U.club, ball.lie) * scale;
   const tk = targetPower() / scale;
-  const near = (k) => Math.abs(X(k) - X(tk)) < 26;
+  const near = (k) => Math.abs(X(k) - X(tk)) < 44;
   for (const k of [0.25, 0.5, 0.75, 1]) {
     c.fillStyle = 'rgba(255,255,255,0.55)';
     c.fillRect(X(k) - 0.5, top, 1, bh);
@@ -1470,7 +1474,8 @@ function drawSide() {
 // Menus show a slowly turning view of a hole behind them.
 function renderBackdrop(dt) {
   // Behind the menus: a signature hole from the chosen course.
-  const show = coursePick().course.id === 'augusta' ? COURSES[1].holes[11] : 6;
+  const { course } = coursePick();
+  const show = course.holes[course.signature || 0];
   if (!hole || hole.index !== show) {
     hole = buildHole(show, 3);
     wind = windFor(show, 3);
@@ -1873,6 +1878,7 @@ function startPractice(i) {
 }
 
 function toTitle() {
+  if (updateReady) return location.reload();
   leaveOnline();
   G = null;
   hole = null;
@@ -2324,6 +2330,30 @@ on('#btnFinalMenu', () => {
   toTitle();
 });
 $('#codeInput').addEventListener('input', (e) => (e.target.value = cleanCode(e.target.value)));
+
+// When a newer version is published, reload into it: straight away at
+// startup, otherwise the next time the title screen shows.
+let updateReady = false;
+async function checkForUpdate() {
+  if (APP_VERSION === 'dev' || location.protocol !== 'https:') return;
+  try {
+    const res = await fetch(`version.json?t=${Date.now()}`, { cache: 'no-store' });
+    const v = String((await res.json()).v);
+    if (v === APP_VERSION) return;
+    let tried = null;
+    try {
+      tried = sessionStorage.getItem('pl.reloadFor');
+      if (tried !== v) sessionStorage.setItem('pl.reloadFor', v);
+    } catch {}
+    if (tried === v) return; // already reloaded once for this version
+    updateReady = true;
+    if (U.screen === 'title' || !G) location.reload();
+  } catch {}
+}
+checkForUpdate();
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') checkForUpdate();
+});
 
 if ('serviceWorker' in navigator && window.top === window.self && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});

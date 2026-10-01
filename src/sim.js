@@ -1,6 +1,6 @@
 // Shot simulation. Pure and deterministic: the same inputs and seed always
 // give the same result, so two iPads can replay each other's shots exactly.
-import { T, TERRAIN_NAMES, rng, hashSeed } from './course.js';
+import { T, TERRAIN_NAMES, rng, hashSeed } from './course.js?v=8';
 
 export const G = 10.72; // gravity, yards/s²
 export const CUP_R = 0.075; // a little larger than a real cup (0.059 yd)
@@ -107,6 +107,8 @@ const RELEASE = { [T.TEE]: 1, [T.FAIRWAY]: 1, [T.FRINGE]: 0.7, [T.GREEN]: 0.55, 
 // Some courses (Augusta) have faster greens than others.
 function decelAt(hole, ter) {
   if (ter === T.GREEN && hole.greenDecel) return hole.greenDecel;
+  // Firm links turf lets the ball run much further.
+  if (hole.firm > 1 && (ter === T.FAIRWAY || ter === T.FRINGE || ter === T.TEE)) return DECEL[ter] / hole.firm;
   return DECEL[ter] ?? 3;
 }
 
@@ -236,13 +238,15 @@ export function simulateShot(hole, ball, input, wind, seed) {
   let hx = last.x - prev.x, hy = last.y - prev.y;
   const hl = Math.hypot(hx, hy) || 1;
   hx /= hl; hy /= hl;
-  const release = RELEASE[land] ?? 0.3;
+  const release = (RELEASE[land] ?? 0.3) * (land === T.FAIRWAY || land === T.ROUGH ? hole.firm || 1 : 1);
   let rollDist = (club.roll * fp.shape.roll + fp.shape.rollAdd) * release * Math.min(1, p) * (mishit ? 2 : 1);
   // Short shots come in low and release like a chip: a 9 iron runs out,
   // a lob wedge barely moves. Full swings carry their spin and stop.
   // Chip and Flop are measured against the club's normal full swing.
   const swing = p * (fp.shape.short ? fp.shape.carry : 1);
-  rollDist += carry * club.chip * fp.shape.chip * Math.pow(Math.max(0, 1 - swing), 2) * (release / RELEASE[T.GREEN]);
+  // (Only near the green: a long running shot fades out above ~25 yd of carry.)
+  const nearGreen = Math.max(0, Math.min(1, 1 - (carry - 25) / 50));
+  rollDist += carry * club.chip * fp.shape.chip * Math.pow(Math.max(0, 1 - swing), 2) * (release / RELEASE[T.GREEN]) * nearGreen;
   if (p > 1) rollDist *= 1.15;
   rollDist *= fp.g.roll;
   // Topspin releases the ball; backspin grips, and a wedge can zip it backwards.
