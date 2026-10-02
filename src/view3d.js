@@ -31,7 +31,7 @@ const LOOKS = {
     skyTop: '#2f84df', skyHorizon: '#d6ecf8', sun: '#fff3dd', sunI: 2.7, hemiSky: '#d2e8ff', hemiGround: '#4c7a37', hemiI: 1.25, exposure: 1.0,
     ob: '#3f8a3a', deep: '#4c9a40', rough: '#5aa847', fairway: '#7ccb58', fairway2: '#6dbd4f', fringe: '#79c656', green: '#93dd69', green2: '#85d25e',
     sand: '#fbf6ea', sandLip: '#d2c8b0', bed: '#2a5f63', water: '#2a9fb8', deepWater: '#176a86', tree: ['#2e7a3c', '#3c8f46', '#256a36'], trunk: '#8a5a3a',
-    hills: ['#3f8a45', '#56a04f', '#357a40'], sunEl: 0.9, cloud: 0.8, fogNear: 260, fogFar: 1700, hillsH: 1.2, straw: '#a8783f', flowers: true, aug: true, env: 'park',
+    hills: ['#3f8a45', '#56a04f', '#357a40'], sunEl: 0.9, cloud: 0.8, fogNear: 260, fogFar: 1700, hillsH: 1.2, straw: '#8e5c34', flowers: true, aug: true, env: 'park',
   },
   standrews: {
     skyTop: '#6f8aa6', skyHorizon: '#d3dbe1', sun: '#f6efe2', sunI: 2.1, hemiSky: '#e4ecf2', hemiGround: '#8c8f55', hemiI: 1.4, exposure: 0.95,
@@ -551,7 +551,7 @@ export class View3D {
       .catch(() => {}); // keep the plain look if they can't load
     // Extra Augusta surfaces, each optional on its own (grey until loaded).
     // Pine straw is a colour texture; the rest are neutral detail maps.
-    const straw = one(168, 120, 63);
+    const straw = one(142, 92, 52);
     straw.colorSpace = T.SRGBColorSpace;
     const extra = {
       uDStrawA: 'pinestraw', uDStrawN: 'pinestraw_n', uDWSandA: 'sand_white', uDWSandN: 'sand_white_n',
