@@ -31,7 +31,7 @@ const LOOKS = {
     skyTop: '#2f84df', skyHorizon: '#d6ecf8', sun: '#fff3dd', sunI: 2.7, hemiSky: '#d2e8ff', hemiGround: '#4c7a37', hemiI: 1.25, exposure: 1.0,
     ob: '#3f8a3a', deep: '#4c9a40', rough: '#5aa847', fairway: '#7ccb58', fairway2: '#6dbd4f', fringe: '#79c656', green: '#93dd69', green2: '#85d25e',
     sand: '#fbf6ea', sandLip: '#d2c8b0', bed: '#2a5f63', water: '#2a9fb8', deepWater: '#176a86', tree: ['#2e7a3c', '#3c8f46', '#256a36'], trunk: '#8a5a3a',
-    hills: ['#3f8a45', '#56a04f', '#357a40'], sunEl: 0.9, cloud: 0.8, fogNear: 260, fogFar: 1700, hillsH: 1.2, straw: '#c79b62', flowers: true, env: 'park',
+    hills: ['#3f8a45', '#56a04f', '#357a40'], sunEl: 0.9, cloud: 0.8, fogNear: 260, fogFar: 1700, hillsH: 1.2, straw: '#a8783f', flowers: true, aug: true, env: 'park',
   },
   standrews: {
     skyTop: '#6f8aa6', skyHorizon: '#d3dbe1', sun: '#f6efe2', sunI: 2.1, hemiSky: '#e4ecf2', hemiGround: '#8c8f55', hemiI: 1.4, exposure: 0.95,
@@ -148,13 +148,30 @@ function paintTurf(hole, box, px, L) {
   };
   // Pine straw under Augusta's trees.
   if (L.straw) {
+    // Beds of straw under the pines, with ragged edges, spreading into one
+    // carpet through the woods beyond the corridor.
     c.fillStyle = L.straw;
     c.beginPath();
     for (const t of hole.trees) {
-      c.moveTo(t.x + t.r * 1.6, t.y);
-      c.arc(t.x, t.y, t.r * 1.6, 0, TAU);
+      const rr = t.r * (1.9 + r() * 0.6);
+      for (let k = 0; k < 3; k++) {
+        const a = r() * TAU, d = r() * t.r * 0.5, x = t.x + Math.cos(a) * d, y = t.y + Math.sin(a) * d, q = rr * (0.75 + r() * 0.3);
+        c.moveTo(x + q, y);
+        c.arc(x, y, q, 0, TAU);
+      }
     }
     c.fill('nonzero');
+    // Fallen needles thin out onto the grass at the edge of each bed.
+    for (const t of hole.trees) {
+      for (let k = 0; k < 6; k++) {
+        const a = r() * TAU, d = t.r * (1.7 + r() * 1.1), q = 1.5 + r() * 3;
+        c.globalAlpha = 0.35 + r() * 0.3;
+        c.beginPath();
+        c.arc(t.x + Math.cos(a) * d, t.y + Math.sin(a) * d, q, 0, TAU);
+        c.fill();
+      }
+    }
+    c.globalAlpha = 1;
   }
   discs(0, Infinity, hole.roughW);
   c.fillStyle = L.rough;
@@ -532,6 +549,25 @@ export class View3D {
         this.detU.uDetOn.value = 1;
       })
       .catch(() => {}); // keep the plain look if they can't load
+    // Extra Augusta surfaces, each optional on its own (grey until loaded).
+    // Pine straw is a colour texture; the rest are neutral detail maps.
+    const straw = one(168, 120, 63);
+    straw.colorSpace = T.SRGBColorSpace;
+    const extra = {
+      uDStrawA: 'pinestraw', uDStrawN: 'pinestraw_n', uDWSandA: 'sand_white', uDWSandN: 'sand_white_n',
+      uDAugA: 'turf_augusta', uDAugN: 'turf_augusta_n',
+    };
+    for (const [u, f] of Object.entries(extra)) {
+      this.detU[u] = { value: u === 'uDStrawA' ? straw : f.endsWith('_n') ? flat : grey };
+      load(f)
+        .then((t) => {
+          t.wrapS = t.wrapT = T.RepeatWrapping;
+          t.colorSpace = u === 'uDStrawA' ? T.SRGBColorSpace : T.NoColorSpace;
+          t.anisotropy = Math.min(16, aniso);
+          this.detU[u].value = t;
+        })
+        .catch(() => {});
+    }
   }
 
   // Pieces that don't depend on the hole: geometries, materials, pools.
@@ -771,6 +807,39 @@ export class View3D {
     blur(play, Math.round(4 / step));
     const H = new Float32Array(N);
     const t = hole.tee;
+    // The lie of the land: an elevation profile along the hole (spec.elev,
+    // [[yards along the line, height], ...]) lifts or drops everything
+    // around it, so 10 falls away from the tee and 18 climbs to the green.
+    const elev = hole.spec && hole.spec.elev;
+    const E = new Float32Array(N);
+    let eMean = 0;
+    if (elev && elev.length) {
+      const at = (sv) => {
+        if (sv <= elev[0][0]) return elev[0][1];
+        for (let q = 1; q < elev.length; q++) {
+          if (sv <= elev[q][0]) {
+            const a = elev[q - 1], b = elev[q], u = (sv - a[0]) / (b[0] - a[0] || 1);
+            return a[1] + (b[1] - a[1]) * (u * u * (3 - 2 * u));
+          }
+        }
+        return elev[elev.length - 1][1];
+      };
+      // Distance along the line on a coarse grid, then smoothed onto the grid.
+      const C = 4, cw = Math.ceil(box.w / C) + 2, ch = Math.ceil(box.h / C) + 2;
+      const ce = new Float32Array(cw * ch);
+      for (let j = 0; j < ch; j++) for (let i = 0; i < cw; i++) ce[j * cw + i] = at(hole.nearest(box.x + i * C, box.y + j * C)[1]);
+      for (let j = 0; j < gh; j++) {
+        for (let i = 0; i < gw; i++) {
+          const fx = (i * step) / C, fy = (j * step) / C;
+          const ci = Math.min(cw - 2, Math.floor(fx)), cj = Math.min(ch - 2, Math.floor(fy)), u = fx - ci, v = fy - cj, c = cj * cw + ci;
+          E[j * gw + i] = (ce[c] * (1 - u) + ce[c + 1] * u) * (1 - v) + (ce[c + cw] * (1 - u) + ce[c + cw + 1] * u) * v;
+        }
+      }
+      blur(E, Math.round(6 / step));
+      for (let k = 0; k < N; k++) eMean += E[k];
+      eMean /= N;
+    }
+    this.edgeZ = EDGE + eMean;
     for (let j = 0; j < gh; j++) {
       for (let i = 0; i < gw; i++) {
         const k = j * gw + i;
@@ -779,8 +848,8 @@ export class View3D {
         const hills = far * (2.4 + 7 * noise(x / 80, y / 80) + 1.8 * noise(x / 24, y / 24)) * L.hillsH;
         const edge = Math.min(i, j, gw - 1 - i, gh - 1 - j) * step;
         const toEdge = Math.max(0, 1 - edge / 40);
-        let h = base[k] + hills;
-        h = h * (1 - toEdge) + EDGE * toEdge;
+        let h = base[k] + hills + E[k];
+        h = h * (1 - toEdge) + this.edgeZ * toEdge;
         if (Math.hypot(x - t.x, y - t.y) < t.ry + 2) h += 0.35;
         H[k] = h;
       }
@@ -898,7 +967,8 @@ export class View3D {
         cFair: { value: col(L.fairway) }, cFair2: { value: col(L.fairway2) }, cFringe: { value: col(L.fringe) },
         cGreen: { value: col(L.green) }, cGreen2: { value: col(L.green2) }, cSand: { value: col(L.sand) },
         cLip: { value: col(L.sandLip) }, cBed: { value: col(L.bed) }, cRock: { value: col(L.rock || L.sandLip) },
-        uSea: { value: hole.water.some((w) => w.sea) ? 1 : 0 },
+        uSea: { value: hole.water.some((w) => w.sea) ? 1 : 0 }, uAug: { value: L.aug ? 1 : 0 },
+        cStraw: { value: col(L.straw || L.sandLip) },
       });
       sh.vertexShader = 'varying vec3 vWP; varying vec3 vWN;\n' + sh.vertexShader
         .replace('#include <begin_vertex>', '#include <begin_vertex>\n vWP = (modelMatrix * vec4(transformed, 1.0)).xyz;')
@@ -906,7 +976,8 @@ export class View3D {
       sh.fragmentShader = `varying vec3 vWP; varying vec3 vWN;
         uniform sampler2D uSdf, uAlong;
         uniform vec4 uBox, uTee; uniform vec2 uTeeR, uFw; uniform vec3 uGreen;
-        uniform vec3 cFair, cFair2, cFringe, cGreen, cGreen2, cSand, cLip, cBed, cRock; uniform float uSea;
+        uniform vec3 cFair, cFair2, cFringe, cGreen, cGreen2, cSand, cLip, cBed, cRock, cStraw; uniform float uSea, uAug;
+        uniform sampler2D uDStrawA, uDStrawN, uDWSandA, uDWSandN, uDAugA, uDAugN;
         uniform sampler2D uDFairA, uDFairN, uDGreenA, uDGreenN, uDRoughA, uDRoughN, uDSandA, uDSandN, uDSoilA, uDSoilN, uDMacro;
         uniform float uDetOn;
         float inside(float d) { float w = max(fwidth(d) * 0.75, 0.003); return 1.0 - smoothstep(-w, w, d); }
@@ -933,7 +1004,15 @@ export class View3D {
           float su = (alongS - uFw.x + 30.0) / 9.0;
           float sw = clamp(fwidth(su) * 1.5, 0.02, 0.5);
           float stripe = smoothstep(0.5 - sw, 0.5 + sw, abs(fract(su * 0.5) - 0.5) * 2.0);
-          col = mix(col, cFair2 * 0.96, inside(dF - 1.2) * uFw.y);
+          if (uAug > 0.5) {
+            // Augusta mows from green to tee: long passes that follow the
+            // fairway's shape, light and dark only by a whisker.
+            float pu = -dF / 4.2;
+            float pw = clamp(fwidth(pu) * 1.5, 0.02, 0.5);
+            float pass = smoothstep(0.5 - pw, 0.5 + pw, abs(fract(pu * 0.5) - 0.5) * 2.0);
+            stripe = mix(pass, stripe, 0.18) * 0.55;
+          }
+          col = mix(col, cFair2 * (uAug > 0.5 ? 0.9 : 0.96), inside(dF - (uAug > 0.5 ? 2.2 : 1.2)) * uFw.y);
           float wFair = inside(dF) * uFw.y;
           col = mix(col, mix(cFair, cFair2, stripe), wFair);
           // Tee box with fine stripes.
@@ -954,23 +1033,44 @@ export class View3D {
           float chk = sin(gq.x * 3.14159) * sin(gq.y * 3.14159);
           float cw = clamp(fwidth(chk) * 1.5, 0.02, 1.0);
           float checker = smoothstep(-cw, cw, chk);
+          if (uAug > 0.5) {
+            float gu = gq.x * 0.8;
+            float gw2 = clamp(fwidth(gu) * 1.5, 0.02, 0.5);
+            checker = 0.35 + 0.3 * smoothstep(0.5 - gw2, 0.5 + gw2, abs(fract(gu * 0.5) - 0.5) * 2.0);
+          }
           float wGreen = inside(dG);
           col = mix(col, mix(cGreen, cGreen2, checker), wGreen);
           wFringe -= wGreen;
           // Bunkers: a dark lip, then sand that brightens toward the middle.
-          col = mix(col, cLip, inside(dS - 0.55));
+          // Augusta's bunkers are flashed right up to a clean grass edge.
+          col = mix(col, cLip, inside(dS - 0.55) * (1.0 - uAug * 0.85));
           float wSand = inside(dS);
           vec3 sandCol = mix(cSand * vec3(0.9, 0.84, 0.72), cSand * vec3(1.1, 1.04, 0.9), smoothstep(0.0, 2.5, -dS));
+          if (uAug > 0.5) sandCol = cSand * mix(0.93, 1.03, smoothstep(0.0, 1.8, -dS));
+          // The face of each bunker: sloping up to the lip, lit by the sun.
+          vec2 sGrad = vec2(0.0);
+          if (abs(dS) < 3.0) {
+            vec2 e = vec2(0.5 / uBox.z, 0.0), f = vec2(0.0, 0.5 / uBox.w);
+            sGrad = vec2(texture2D(uSdf, suv + e).b - texture2D(uSdf, suv - e).b, texture2D(uSdf, suv + f).b - texture2D(uSdf, suv - f).b);
+          }
+          float face = wSand * (1.0 - smoothstep(0.0, 2.4, -dS));
           col = mix(col, sandCol, wSand);
           // Grass banks around bunkers and greens catch a little shade.
           col *= 1.0 - 0.12 * (inside(dS - 1.6) - inside(dS)) * (1.0 - wGreen);
+          float wStraw = uAug * smoothstep(0.0, 0.06, diffuseColor.r - diffuseColor.g * 0.92) * (1.0 - wFair) * (1.0 - wSand) * (1.0 - wBed);
+          // Needles keep the painted shade under the trees.
+          if (wStraw > 0.002) {
+            float sh = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11)) / max(dot(cStraw, vec3(0.3, 0.59, 0.11)), 0.01);
+            vec3 sa = det(uDStrawA, vWP.xy, 2.5, smoothstep(0.42, 0.58, texture2D(uDMacro, vWP.xy / 23.0 + 0.5).r)).rgb;
+            col = mix(col, sa * clamp(sh, 0.3, 1.2), wStraw);
+          }
           diffuseColor.rgb = col;
 
           // Crisp detail textures on every surface, fading with distance.
           float dCam = distance(cameraPosition, vWP);
           float macro = texture2D(uDMacro, vWP.xy / 61.0).r;
           float sel = smoothstep(0.42, 0.58, texture2D(uDMacro, vWP.xy / 23.0 + 0.5).r);
-          float wRough = clamp(1.0 - wFair - wGreen - max(wFringe, 0.0) - wSand - wBed, 0.0, 1.0);
+          float wRough = clamp(1.0 - wFair - wGreen - max(wFringe, 0.0) - wSand - wBed - wStraw, 0.0, 1.0);
           vec4 dA = vec4(0.5), dN = vec4(0.5, 0.5, 1.0, 1.0);
           // Detail only where it can be seen; normal maps only up close.
           bool nearN = dCam < 140.0;
@@ -978,15 +1078,22 @@ export class View3D {
             dA = vec4(0.0);
             if (nearN) dN = vec4(0.0);
             float wf = wFair + max(wFringe, 0.0);
-            if (wf > 0.002) { dA += wf * det(uDFairA, vWP.xy, 1.1, sel); if (nearN) dN += wf * det(uDFairN, vWP.xy, 1.1, sel); }
+            if (wf > 0.002) {
+              if (uAug > 0.5) { dA += wf * det(uDAugA, vWP.xy, 1.0, sel); if (nearN) dN += wf * det(uDAugN, vWP.xy, 1.0, sel); }
+              else { dA += wf * det(uDFairA, vWP.xy, 1.1, sel); if (nearN) dN += wf * det(uDFairN, vWP.xy, 1.1, sel); }
+            }
             if (wGreen > 0.002) { dA += wGreen * det(uDGreenA, vWP.xy, 0.9, sel); if (nearN) dN += wGreen * det(uDGreenN, vWP.xy, 0.9, sel); }
             if (wRough > 0.002) { dA += wRough * det(uDRoughA, vWP.xy, 1.8, sel); if (nearN) dN += wRough * det(uDRoughN, vWP.xy, 1.8, sel); }
-            if (wSand > 0.002) { dA += wSand * det(uDSandA, vWP.xy, 2.0, sel); if (nearN) dN += wSand * det(uDSandN, vWP.xy, 2.0, sel); }
+            if (wSand > 0.002) {
+              if (uAug > 0.5) { dA += wSand * det(uDWSandA, vWP.xy, 1.6, sel); if (nearN) dN += wSand * det(uDWSandN, vWP.xy, 1.6, sel); }
+              else { dA += wSand * det(uDSandA, vWP.xy, 2.0, sel); if (nearN) dN += wSand * det(uDSandN, vWP.xy, 2.0, sel); }
+            }
+            if (wStraw > 0.002) { dA += wStraw * vec4(0.5); if (nearN) dN += wStraw * det(uDStrawN, vWP.xy, 2.5, sel); }
             if (wBed > 0.002) { dA += wBed * det(uDSoilA, vWP.xy, 3.0, sel); if (nearN) dN += wBed * det(uDSoilN, vWP.xy, 3.0, sel); }
           }
           // A coarser pass of the same grass so the mid-distance isn't flat.
           if (uDetOn > 0.5 && dCam > 4.0 && dCam < 160.0) {
-            float wg = 1.0 - wSand - wBed;
+            float wg = 1.0 - wSand - wBed - wStraw;
             vec2 mp = rot2(0.7) * vWP.xy / 6.3;
             vec3 midA = mix(texture2D(uDFairA, mp).rgb, texture2D(uDRoughA, mp).rgb, wRough);
             dA.rgb = mix(dA.rgb, dA.rgb * midA * 2.0, 0.6 * wg * smoothstep(4.0, 18.0, dCam));
@@ -994,8 +1101,13 @@ export class View3D {
           float detFade = 1.0 - smoothstep(60.0, 220.0, dCam);
           diffuseColor.rgb *= mix(vec3(1.0), dA.rgb * 2.0, detFade) * (1.0 + (macro - 0.5) * (0.25 + 0.3 * wRough));
           vec3 tN = dN.xyz * 2.0 - 1.0;
-          float nStr = (0.6 + 0.4 * wRough + 0.9 * wSand) * (1.0 - smoothstep(30.0, 140.0, dCam));
-          vec3 wN = normalize(vWN + (vec3(1.0, 0.0, 0.0) * tN.x + vec3(0.0, 1.0, 0.0) * tN.y) * nStr);`)
+          float nStr = (0.6 + 0.4 * wRough + 0.9 * wSand + 0.8 * wStraw) * (1.0 - smoothstep(30.0, 140.0, dCam));
+          vec3 wN = normalize(vWN + (vec3(1.0, 0.0, 0.0) * tN.x + vec3(0.0, 1.0, 0.0) * tN.y) * nStr);
+          // Bunker faces tilt toward the middle; the gradient points outward.
+          if (face > 0.0) {
+            float gl = length(sGrad);
+            if (gl > 1e-4) wN = normalize(wN - vec3(sGrad / gl, 0.0) * face * 0.9);
+          }`)
         .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
           normal = normalize(mat3(viewMatrix) * wN);`)
 ;
@@ -1036,7 +1148,7 @@ export class View3D {
     const bx0 = box.x, by0 = box.y, bx1 = box.x + box.w, by1 = box.y + box.h;
     for (const [x0, y0, x1, y1] of [[cx - big, cy - big, cx + big, by0], [cx - big, by1, cx + big, cy + big], [cx - big, by0, bx0, by1], [bx1, by0, cx + big, by1]]) {
       const pl = new T.Mesh(new T.PlaneGeometry(x1 - x0, y1 - y0), outer);
-      pl.position.set((x0 + x1) / 2, (y0 + y1) / 2, EDGE - 0.05);
+      pl.position.set((x0 + x1) / 2, (y0 + y1) / 2, this.edgeZ - 0.05);
       pl.receiveShadow = true;
       group.add(pl);
     }
@@ -1093,7 +1205,7 @@ export class View3D {
       const a = (i / 44) * TAU + r() * 0.1, d = 1300 + r() * 900;
       const rx = 180 + r() * 260, rz = (40 + r() * 90) * (0.4 + L.hillsH * 0.6);
       sc.set(rx, rx * (0.6 + r() * 0.5), rz);
-      p.set(cx + Math.cos(a) * d, cy + Math.sin(a) * d, EDGE - rz * 0.35);
+      p.set(cx + Math.cos(a) * d, cy + Math.sin(a) * d, (this.edgeZ ?? EDGE) - rz * 0.35);
       q.setFromAxisAngle(new T.Vector3(0, 0, 1), r() * TAU);
       m.compose(p, q, sc);
       hills.setMatrixAt(i, m);
@@ -1585,7 +1697,7 @@ export class View3D {
     const g = this.grid;
     if (!g) return 0;
     const fx = (x - g.x) / g.step, fy = (y - g.y) / g.step;
-    if (fx < 0 || fy < 0 || fx >= g.gw - 1 || fy >= g.gh - 1) return EDGE;
+    if (fx < 0 || fy < 0 || fx >= g.gw - 1 || fy >= g.gh - 1) return this.edgeZ ?? EDGE;
     const i = Math.floor(fx), j = Math.floor(fy), u = fx - i, v = fy - j;
     const H = g.H, w = g.gw;
     const a = H[j * w + i], b = H[j * w + i + 1], c = H[(j + 1) * w + i], d = H[(j + 1) * w + i + 1];
