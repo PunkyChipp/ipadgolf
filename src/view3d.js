@@ -865,13 +865,16 @@ export class View3D {
       for (let k = 0; k < N; k++) eMean += E[k];
       eMean /= N;
     }
-    this.edgeZ = EDGE + eMean;
+    // Augusta rolls gently into the woods; elsewhere the land rises at the edges.
+    this.edgeZ = (L.aug ? 1.5 : EDGE) + eMean;
     for (let j = 0; j < gh; j++) {
       for (let i = 0; i < gw; i++) {
         const k = j * gw + i;
         const x = box.x + i * step, y = box.y + j * step;
         const far = Math.pow(1 - Math.min(1, play[k] * 1.6), 1.4);
-        const hills = far * (2.4 + 7 * noise(x / 80, y / 80) + 1.8 * noise(x / 24, y / 24)) * L.hillsH;
+        const hills = L.aug
+          ? far * far * (0.6 + 2.2 * noise(x / 70, y / 70) + 0.8 * noise(x / 22, y / 22))
+          : far * (2.4 + 7 * noise(x / 80, y / 80) + 1.8 * noise(x / 24, y / 24)) * L.hillsH;
         const edge = Math.min(i, j, gw - 1 - i, gh - 1 - j) * step;
         const toEdge = Math.max(0, 1 - edge / 40);
         let h = base[k] + hills + E[k];
@@ -888,7 +891,10 @@ export class View3D {
         const d = sdAt(sd.S, x, y);
         if (d > 2) continue;
         const k = j * gw + i;
-        const bowl = -0.75 * Math.pow(Math.min(1, Math.max(0, -d) / 2.2), 0.6);
+        // A smooth dish: a sharp drop at the edge saws up on the 1 yd mesh;
+        // the shader's face lighting gives the crisp flashed edge instead.
+        const t = Math.min(1, Math.max(0, -d) / 2.6);
+        const bowl = -0.75 * t * t * (3 - 2 * t);
         const lip = d > 0 ? 0.16 * (1 - d / 2) : 0.16 * Math.max(0, 1 + d / 0.35);
         H[k] = H[k] * (d > 0 ? 1 : 0.3) + bowl + lip;
       }
@@ -1088,7 +1094,8 @@ export class View3D {
           if (wStraw > 0.002) {
             float sh = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11)) / max(dot(cStraw, vec3(0.3, 0.59, 0.11)), 0.01);
             vec3 sa = det(uDStrawA, vWP.xy, 2.5, smoothstep(0.42, 0.58, texture2D(uDMacro, vWP.xy / 23.0 + 0.5).r)).rgb;
-            col = mix(col, sa * clamp(sh, 0.3, 1.2), wStraw);
+            sa = mix(sa, vec3(dot(sa, vec3(0.3, 0.59, 0.11))), 0.25) * vec3(0.82, 0.8, 0.82);
+            col = mix(col, sa * clamp(sh, 0.3, 1.1), wStraw);
           }
           diffuseColor.rgb = col;
 
