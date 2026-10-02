@@ -8,13 +8,15 @@ free of third-party licences (CC0 / public domain).
     pip install --user pillow numpy scipy
     python3 tools/gen_textures.py            # all textures
     python3 tools/gen_textures.py grass_rough sand   # only some
+    (Augusta set: pinestraw sand_white turf_augusta stone bark_loblolly water_creek)
 
 Conventions
-  * Detail maps (grass_*, sand, soil, macro) are near-neutral grey with a
+  * Detail maps (grass_*, sand, sand_white, turf_augusta, soil, macro) are near-neutral grey with a
     per-channel mean of 0.5 (128).  The shader does  base * detail * 2.
     Load them as linear data (no sRGB decode) so 128 means 0.5 in the shader.
   * Normal maps are tangent space, OpenGL convention (+X right, +Y up the
     image, i.e. green = up), flat = (128, 128, 255).
+  * Colour albedos (bark, bark_loblolly, pinestraw, stone, foliage, clouds) are sRGB.
   * Everything tiles in both axes: all noise is built with FFTs on the torus
     and all strokes/dots are drawn with wrap-around.
 """
@@ -1056,6 +1058,575 @@ def gen_clouds(seed=81, W=2048, H=512):
 
 
 # --------------------------------------------------------------------------
+# Augusta set: shared helpers
+# --------------------------------------------------------------------------
+
+def voronoi_torus(H, W, pts, wts=None, sx=1.0, sy=1.0, warp=None, chunk=48):
+    """Power-diagram Voronoi on the torus.  pts are (x, y) pixel coords; the
+    metric is (dx*sx, dy*sy); wts are power weights in squared metric units
+    (bigger = bigger cell).  warp = (wx, wy) per-pixel coordinate offsets
+    (periodic arrays) to bend the edges.  Returns nearest id, distance to the
+    nearest cell edge (metric units, exact bisector distance), and the
+    metric offset (dx, dy) from the cell's seed."""
+    pts = np.asarray(pts, float)
+    n = len(pts)
+    wts = np.zeros(n) if wts is None else np.asarray(wts, float)
+    ids = np.empty((H, W), np.int32)
+    edge = np.empty((H, W), np.float32)
+    ox = np.empty((H, W), np.float32)
+    oy = np.empty((H, W), np.float32)
+    xs = np.arange(W) + 0.5
+    for y0 in range(0, H, chunk):
+        y1 = min(H, y0 + chunk)
+        Y, X = np.meshgrid(np.arange(y0, y1) + 0.5, xs, indexing="ij")
+        if warp is not None:
+            X = X + warp[0][y0:y1]
+            Y = Y + warp[1][y0:y1]
+        dx = X[..., None] - pts[:, 0]
+        dx -= W * np.round(dx / W)
+        dx *= sx
+        dy = Y[..., None] - pts[:, 1]
+        dy -= H * np.round(dy / H)
+        dy *= sy
+        d2 = dx * dx + dy * dy - wts
+        i = np.argmin(d2, -1)[..., None]
+        dxi = np.take_along_axis(dx, i, -1)
+        dyi = np.take_along_axis(dy, i, -1)
+        d2i = np.take_along_axis(d2, i, -1)
+        vx = dx - dxi
+        vy = dy - dyi
+        den = 2 * np.sqrt(vx * vx + vy * vy)
+        e = (d2 - d2i) / np.maximum(den, 1e-9)
+        np.put_along_axis(e, i, np.inf, -1)
+        ids[y0:y1] = i[..., 0]
+        edge[y0:y1] = e.min(-1)
+        ox[y0:y1] = dxi[..., 0]
+        oy[y0:y1] = dyi[..., 0]
+    return ids, edge, ox, oy
+
+
+def lloyd_points(rng, n, H, W, sx=1.0, sy=1.0, iters=3, res=192):
+    """n well-spaced (but irregular) points on the torus via Lloyd relaxation."""
+    pts = rng.random((n, 2)) * [W, H]
+    h = res
+    w = max(16, int(res * W / H))
+    for _ in range(iters):
+        p = pts * [w / W, h / H]
+        ids, _, _, _ = voronoi_torus(h, w, p, sx=sx * W / w, sy=sy * H / h)
+        yy, xx = np.mgrid[0:h, 0:w] + 0.5
+        for k in range(n):
+            m = ids == k
+            if not m.any():
+                continue
+            ax = np.angle(np.exp(2j * np.pi * xx[m] / w).mean()) / (2 * np.pi) % 1.0
+            ay = np.angle(np.exp(2j * np.pi * yy[m] / h).mean()) / (2 * np.pi) % 1.0
+            pts[k] = [ax * W, ay * H]
+    return pts
+
+
+def ao_from_height(h, sigmas=(2.0, 8.0), k=(1.0, 0.6)):
+    """Cheap cavity term: how far below its blurred neighbourhood a pixel is."""
+    out = np.zeros_like(h)
+    for s, kk in zip(sigmas, k):
+        out += kk * np.maximum(blur(h, s) - h, 0)
+    return out
+
+
+# --------------------------------------------------------------------------
+# pine straw (colour albedo, sRGB)
+# --------------------------------------------------------------------------
+
+STRAW_COLS = np.array([
+    [0.64, 0.33, 0.15],   # rust
+    [0.71, 0.43, 0.22],   # cinnamon
+    [0.76, 0.54, 0.31],   # tan
+    [0.52, 0.27, 0.13],   # deep rust
+    [0.45, 0.28, 0.17],   # dark brown
+    [0.60, 0.47, 0.35],   # weathered grey-tan
+])
+STRAW_W = np.array([0.30, 0.25, 0.12, 0.14, 0.10, 0.09])
+
+
+def _needle_set(rng, n_fasc, n_loose, S, ss, len_rng, wid, z_rng, nseg=4):
+    """Pine needles as nseg-segment slightly curved tapered strokes.  Most come
+    in fascicles of three sharing a base point (loblolly)."""
+    # descriptors
+    nb = n_fasc + n_loose
+    base = rng.random((nb, 2)) * S
+    ang = rng.random(nb) * 2 * np.pi
+    ln = (len_rng[0] + (len_rng[1] - len_rng[0]) * rng.random(nb) ** 0.8) * ss
+    z = z_rng[0] + (z_rng[1] - z_rng[0]) * rng.random(nb)
+    reps = np.concatenate([np.full(n_fasc, 3), np.ones(n_loose, int)])
+    owner = np.repeat(np.arange(nb), reps)
+    N = owner.size
+    k_in = np.concatenate([np.arange(3)] * n_fasc + [np.zeros(n_loose, int)]) if n_fasc else np.zeros(N, int)
+    fasc = reps[owner] == 3
+    spread = rng.uniform(0.03, 0.20, nb)[owner]
+    a = ang[owner] + np.where(fasc, (k_in - 1) * spread, 0) + rng.normal(0, 0.02, N)
+    L = ln[owner] * (1 + rng.normal(0, 0.06, N))
+    # broken needles: some are short bits with no fascicle sheath
+    broken = (~fasc) & (rng.random(N) < 0.45)
+    L = np.where(broken, L * rng.uniform(0.25, 0.7, N), L)
+    p = base[owner] + np.where(fasc[:, None], 0, 0)
+    w = rng.uniform(wid[0], wid[1], N) * ss * 0.5
+    zz = z[owner] + k_in * 0.002 + rng.normal(0, 0.004, N)
+    slope = rng.normal(0, 0.03, N)
+    curv = rng.normal(0, 0.10, N)  # total bend over the needle (radians)
+    P0, P1, W0, W1, Z0, Z1, NID, GT = [], [], [], [], [], [], [], []
+    for j in range(nseg):
+        t0 = j / nseg
+        t1 = (j + 1) / nseg
+        aj = a + curv * (t0 + t1 - 1) * 0.5 * 2
+        q = p + (L / nseg)[:, None] * np.stack([np.cos(aj), np.sin(aj)], 1)
+        wt = lambda t: w * (1 - 0.75 * smoothstep(0.7, 1.0, t)) * (0.8 + 0.2 * smoothstep(0.0, 0.08, t))
+        P0.append(p); P1.append(q)
+        W0.append(wt(t0)); W1.append(wt(t1))
+        Z0.append(zz + slope * t0); Z1.append(zz + slope * t1)
+        NID.append(np.arange(N)); GT.append(np.stack([np.full(N, t0), np.full(N, t1)], 1))
+        p = q
+    cat = lambda x: np.concatenate(x)
+    return dict(P0=cat(P0), P1=cat(P1), W0=cat(W0), W1=cat(W1), Z0=cat(Z0), Z1=cat(Z1),
+                nid=cat(NID), gt=cat(GT), N=N, fasc=fasc, broken=broken, angle=a)
+
+
+def _shade_needles(rng, res, nd, z_lo, z_hi, light=(-0.45, -0.89)):
+    """Colour for rasterised needles (sRGB)."""
+    N = nd["N"]
+    idm = res["id"]
+    filled = idm >= 0
+    seg = np.where(filled, idm, 0)
+    nid = nd["nid"][seg]
+    gt = nd["gt"][seg]
+    t = gt[..., 0] + (gt[..., 1] - gt[..., 0]) * res["t"]
+    s = res["s"]
+    pick = rng.choice(len(STRAW_COLS), N, p=STRAW_W / STRAW_W.sum())
+    pick2 = rng.choice(len(STRAW_COLS), N, p=STRAW_W / STRAW_W.sum())
+    mixk = rng.random(N)[:, None] * 0.5
+    ncol = STRAW_COLS[pick] * (1 - mixk) + STRAW_COLS[pick2] * mixk
+    ncol *= (1 + rng.normal(0, 0.07, N))[:, None]
+    phase = rng.random(N) * 2 * np.pi
+    freq = rng.uniform(2, 7, N)
+    col = ncol[nid]
+    # along-needle variation and darker fascicle sheath at the base
+    along = 1 + 0.06 * np.sin(t * freq[nid] + phase[nid])
+    sheath = nd["fasc"][nid] & (t < 0.045)
+    col = col * along[..., None]
+    col = np.where(sheath[..., None], np.array([0.20, 0.13, 0.09]), col)
+    # tips a touch paler/greyer
+    tip = smoothstep(0.85, 1.0, t)[..., None] * (~nd["broken"][nid])[..., None]
+    col = col * (1 - 0.25 * tip) + np.array([0.55, 0.45, 0.36]) * 0.25 * tip
+    # round cross-section: lit side, glossy ridge, darker rims
+    a = nd["angle"][nid]
+    side = -np.sin(a) * light[0] + np.cos(a) * light[1]
+    sh = 1 + 0.22 * s * side - 0.30 * np.abs(s) ** 2.5
+    sh += 0.16 * np.exp(-((s - 0.25 * np.sign(side)) / 0.3) ** 2)
+    col = col * sh[..., None]
+    # depth: lower layers are older (darker, greyer) and shadowed
+    zn = np.clip((res["z"] - z_lo) / (z_hi - z_lo), 0, 1)
+    dk = 0.42 + 0.58 * zn ** 0.8
+    grey = col.mean(-1, keepdims=True)
+    col = col * (1 - 0.35 * (1 - zn[..., None])) + grey * 0.35 * (1 - zn[..., None])
+    col = col * dk[..., None]
+    return col, filled
+
+
+def _pine_cone(Hs, Ws, c, ang, L, Wm, openness, rng):
+    """Procedural loblolly cone lying on its side.  Returns slices + layers."""
+    ext = int(L * 0.62 + Wm + 6)
+    xs = np.arange(int(c[0]) - ext, int(c[0]) + ext + 1)
+    ys = np.arange(int(c[1]) - ext, int(c[1]) + ext + 1)
+    X, Y = np.meshgrid(xs + 0.5, ys + 0.5)
+    sl = np.ix_(ys % Hs, xs % Ws)
+    d = np.array([np.cos(ang), np.sin(ang)])
+    p = np.array([-d[1], d[0]])
+    rx = X - c[0]
+    ry = Y - c[1]
+    u = (rx * d[0] + ry * d[1]) / L + 0.5          # 0 = base (stalk), 1 = tip
+    v = rx * p[0] + ry * p[1]
+    uc = np.clip(u, 1e-4, 1)
+    prof = Wm * np.sin(np.pi * uc ** 0.72) ** 0.55
+    # open cones: scales splay, outline gets ragged per scale row
+    q = np.clip(v / np.maximum(prof, 1e-3), -1, 1)
+    th = np.arcsin(q)
+    k = 3.0
+    nrow = 6.5
+    P = u * nrow + th / np.pi * k
+    Q = u * nrow - th / np.pi * k
+    fp = P - np.floor(P)
+    fq = Q - np.floor(Q)
+    cell_e = np.minimum(np.minimum(fp, 1 - fp), np.minimum(fq, 1 - fq))  # 0 at crevice .. 0.5 centre
+    rag = openness * 0.12 * Wm * (smoothstep(0.0, 0.25, cell_e) - 0.5)
+    inside = (u > 0.0) & (u < 1.0) & (np.abs(v) < prof + rag)
+    # stalk
+    sv = np.abs(v)
+    stalk = (u < 0.02) & (u > -0.08) & (sv < 0.05 * Wm + 1)
+    # scale relief: raised rhombic apophysis with a central umbo
+    cx = fp - 0.5
+    cy = fq - 0.5
+    rd = np.abs(cx) + np.abs(cy)
+    apo = 1 - smoothstep(0.25, 0.5 + 0.0 * rd, rd)
+    umbo = 1 - smoothstep(0.03, 0.09, np.hypot(cx, cy))
+    crev = 1 - smoothstep(0.015, 0.06 + 0.10 * openness, cell_e)
+    along = smoothstep(0.0, 1.0, 1 - (fp + fq) * 0.5)
+    hgt = np.cos(th) * 0.8 * (prof / Wm) ** 0.5 + 0.06 * apo + 0.08 * along + 0.03 * umbo - 0.18 * crev
+    # colour
+    rid = (np.floor(P) * 31 + np.floor(Q) * 17).astype(int) % 97
+    jit = np.sin(rid * 12.9898) * 0.5 + 0.5
+    inner = np.array([0.30, 0.17, 0.09])
+    body = np.array([0.46, 0.30, 0.18])
+    outer = np.array([0.62, 0.48, 0.34])
+    umb = np.array([0.30, 0.24, 0.19])
+    # shingled: each scale is lit at its exposed outer lip (toward the base)
+    # and shadowed where the next scale overlaps it
+    keel = 1 - smoothstep(0.0, 0.06, np.abs(cx - cy))
+    col = body + (outer - body) * (0.75 * along)[..., None]
+    col = col + (inner - col) * ((1 - along) ** 2 * 0.6)[..., None]
+    col = col * (0.80 + 0.32 * jit)[..., None] * (1 + 0.10 * keel * apo)[..., None]
+    col = col + (umb - col) * (0.8 * umbo)[..., None]
+    col = col * (1 - 0.80 * crev * (0.35 + 0.65 * (1 - along)))[..., None]
+    col = col * (0.85 + 0.35 * smoothstep(0.0, 0.25, u))[..., None]  # darker near stalk
+    # cylinder lighting from upper left
+    lside = -(p @ np.array([-0.45, -0.89]))
+    lit = (0.62 + 0.38 * np.cos(th) + 0.25 * np.sin(th) * lside) * 0.84
+    col = col * lit[..., None]
+    col = np.where(stalk[..., None] & ~inside[..., None], np.array([0.28, 0.18, 0.11]), col)
+    mask = inside | stalk
+    hgt = np.where(stalk & ~inside, 0.15, hgt)
+    return sl, mask, col, hgt
+
+
+def gen_pinestraw(seed=91, size=1024, ss=2):
+    rng = np.random.default_rng(seed)
+    S = size * ss
+    # ~2.5 yd tile -> 2.2 mm/px; loblolly needles 15-23 cm
+    Z_LO, Z_HI = 0.0, 0.62
+    nd = _needle_set(rng, 9500, 15000, S, ss, (55, 100), (1.5, 2.3), (Z_LO, Z_HI))
+    # loose cone scales (small wedges), resting on top of the straw
+    n_sc = 70
+    sp = rng.random((n_sc, 2)) * S
+    sa = rng.random(n_sc) * 2 * np.pi
+    sL = rng.uniform(6, 11, n_sc) * ss
+    sd = np.stack([np.cos(sa), np.sin(sa)], 1)
+    P0 = np.concatenate([nd["P0"], sp])
+    P1 = np.concatenate([nd["P1"], sp + sd * sL[:, None]])
+    W0 = np.concatenate([nd["W0"], np.full(n_sc, 1.0 * ss)])
+    W1 = np.concatenate([nd["W1"], rng.uniform(2.6, 3.8, n_sc) * ss])
+    zs = rng.uniform(0.60, 0.66, n_sc)
+    Z0 = np.concatenate([nd["Z0"], zs])
+    Z1 = np.concatenate([nd["Z1"], zs + 0.02])
+    dome = np.concatenate([np.full(len(nd["P0"]), 0.012), np.full(n_sc, 0.03)])
+    res = raster_strokes(S, S, P0, P1, W0, W1, np.clip(Z0, 0, 0.95), np.clip(Z1, 0, 0.95), dome, wrap=True)
+    nseg_tot = len(nd["P0"])
+    idm = res["id"]
+    is_scale = idm >= nseg_tot
+    r_n = dict(res)
+    r_n["id"] = np.where(is_scale, -1, idm)
+    col, filled_n = _shade_needles(rng, r_n, nd, Z_LO, Z_HI)
+    # scales: dark chestnut with a lighter weathered tip
+    sc_t = res["t"]
+    sc_col = np.array([0.36, 0.20, 0.10]) + (np.array([0.62, 0.48, 0.34]) - np.array([0.36, 0.20, 0.10])) * smoothstep(0.55, 0.95, sc_t)[..., None]
+    sc_col = sc_col * (1 - 0.3 * np.abs(res["s"]) ** 2)[..., None]
+    col = np.where(is_scale[..., None], sc_col, col)
+    filled = idm >= 0
+    gn = noise_fbm(rng, S, S, 8, S / 4, 0.8)
+    gap = np.array([0.10, 0.06, 0.035]) * (1 + 0.2 * gn)[..., None]
+    col = np.where(filled[..., None], col, gap)
+    h = np.where(filled, res["z"], -0.06 + 0.01 * gn)
+    # contact shadows / cavities between layered needles
+    cav = ao_from_height(h, (2.0 * ss, 7.0 * ss), (1.6, 1.0))
+    col = col * np.clip(1 - 2.2 * cav, 0.25, 1)[..., None]
+
+    # pine cones (a few, one quite open)
+    cones = [((0.23, 0.31), 0.6, 60, 0.36, 0.2), ((0.71, 0.66), 2.5, 66, 0.44, 0.9),
+             ((0.86, 0.12), 4.3, 54, 0.36, 0.4)]
+    cmask = np.zeros((S, S), bool)
+    shadow = np.zeros((S, S), np.float32)
+    ccol = np.zeros((S, S, 3), np.float32)
+    chgt = np.zeros((S, S), np.float32)
+    for (cx, cy), a, Lc, wr, op in cones:
+        Lp = Lc * ss
+        sl, m, c, hh = _pine_cone(S, S, (cx * S, cy * S), a, Lp, Lp * wr, op, rng)
+        sub = cmask[sl]
+        ccol[sl] = np.where(m[..., None], c, ccol[sl])
+        chgt[sl] = np.where(m, 0.70 + 0.28 * hh, chgt[sl])
+        cmask[sl] = sub | m
+    sh = np.roll(np.roll(cmask.astype(np.float32), 5 * ss, 0), 3 * ss, 1)
+    shadow = np.clip(blur(sh, 4.0 * ss) * 1.3, 0, 1)
+    col = col * (1 - 0.6 * shadow * (~cmask))[..., None]
+    col = np.where(cmask[..., None], ccol, col)
+    h = np.where(cmask, chgt, h)
+
+    # a few needles lying over everything (incl. across the cones)
+    top = _needle_set(rng, 120, 260, S, ss, (55, 100), (1.5, 2.3), (0.985, 0.995))
+    rt = raster_strokes(S, S, top["P0"], top["P1"], top["W0"], top["W1"],
+                        np.clip(top["Z0"], 0, 0.999), np.clip(top["Z1"], 0, 0.999), 0.004, wrap=True)
+    tcol, tf = _shade_needles(rng, rt, top, 0.0, 1.0)
+    # shadow of the top needles
+    tsh = blur(np.roll(np.roll(tf.astype(np.float32), 3 * ss, 0), 2 * ss, 1), 1.5 * ss)
+    col = col * (1 - 0.45 * tsh * (~tf))[..., None]
+    col = np.where(tf[..., None], tcol, col)
+    h = np.where(tf, np.maximum(h, 0.62) + 0.05 + 0.02 * (1 - np.abs(rt["s"]) ** 2), h)
+
+    # gentle large-scale variation (sun-bleached vs damp patches), kept low
+    patch = noise_fbm(rng, S, S, 2, 10, 1.2)
+    col = col * (1 + 0.05 * patch)[..., None]
+    col = downsample(col, ss)
+    h = downsample(h.astype(np.float64), ss)
+    nrm = normal_target(blur(h, 0.6), 0.55)
+    return np.clip(col, 0, 1), nrm
+
+
+# --------------------------------------------------------------------------
+# white bunker sand (detail map)
+# --------------------------------------------------------------------------
+
+def gen_sand_white(seed=23, size=1024, ss=2):
+    rng = np.random.default_rng(seed)
+    S = size * ss
+    n = 560_000
+    pos = rng.random((n, 2)) * S
+    rad = (0.45 + 0.75 * rng.random(n) ** 2.0) * ss
+    z0 = rng.random(n) * 0.5
+    res = raster_strokes(S, S, pos, pos + 0.01, rad, rad, z0, z0, 0.3, wrap=True)
+    idm = res["id"]
+    filled = idm >= 0
+    ids = np.where(filled, idm, 0)
+    kind = rng.random(n)
+    lum = 1.0 + rng.normal(0, 0.035, n)
+    lum = np.where(kind < 0.012, lum * 0.80, lum)              # rare darker mineral grains
+    lum = np.where((kind > 0.012) & (kind < 0.04), lum * 0.93, lum)  # faint beige feldspar
+    spark = kind > 0.985                                       # glassy quartz glints
+    lum = np.where(spark, lum * 1.30, lum)
+    warm = np.where((kind > 0.012) & (kind < 0.04), 0.03, 0.0) + rng.normal(0, 0.006, n)
+    rr = res["r"]
+    shade = lum[ids] * (1.0 - 0.12 * rr ** 2)
+    # glints: tight hot spot on the grain, offset toward the light
+    shade = shade + np.where(spark[ids], 0.25 * (1 - smoothstep(0.0, 0.6, rr)), 0)
+    col = np.stack([shade * (1 + warm[ids]), shade, shade * (1 - warm[ids])], -1)
+    fine = noise_fbm(rng, S, S, 32, S / 2, 0.6)
+    gap = 0.84 + 0.03 * fine
+    col = np.where(filled[..., None], col, np.stack([gap, gap, gap * 1.01], -1))
+    hgr = np.where(filled, res["z"], 0.0)
+    lit = height_to_normal(hgr, 3.0) @ BAKE_L
+    col = col * (0.84 + 0.18 * lit)[..., None]
+    col = downsample(col, ss)
+    hgr = downsample(hgr.astype(np.float64), ss)
+
+    # rake lines: ~72 grooves per tile (≈1" tine spacing at 2 yd), running
+    # along V, wandering gently; strength varies (some smoothed areas)
+    yy, xx = (np.mgrid[0:size, 0:size] + 0.5) / size
+    warp = noise_fbm(rng, size, size, 1, 4, 1.6)
+    warp2 = noise_fbm(rng, size, size, 2, 8, 1.4)
+    phase = 2 * np.pi * (72 * xx + 2 * yy) + 2.2 * warp + 0.5 * warp2
+    rake = np.cos(phase)
+    rake = np.sign(rake) * np.abs(rake) ** 0.8                 # slightly sharper ridges
+    amp = np.clip(0.65 + 0.45 * noise_fbm(rng, size, size, 1, 5, 1.5), 0.15, 1.1)
+    rake *= amp
+    # second, fainter pass at a small angle (overlapping rake strokes)
+    phase2 = 2 * np.pi * (71 * xx - 5 * yy) + 2.0 * warp2
+    m2 = smoothstep(0.3, 1.0, noise_fbm(rng, size, size, 1, 4, 1.5))
+    rake = rake * (1 - 0.3 * m2) + 0.3 * m2 * np.cos(phase2)
+    soft = noise_fbm(rng, size, size, 4, 40, 1.0)
+    col = col * (1.0 + 0.022 * rake + 0.010 * soft)[..., None]
+    alb = neutralise(col, 0.062, chroma_std=0.005)
+    h = hgr * 0.40 + rake * 0.30 + soft * 0.12
+    nrm = height_to_normal(blur(h, 0.6), 1.1)
+    return alb, nrm
+
+
+# --------------------------------------------------------------------------
+# stone masonry (colour albedo)
+# --------------------------------------------------------------------------
+
+STONE_COLS = np.array([
+    [0.58, 0.56, 0.52],   # warm grey
+    [0.64, 0.58, 0.49],   # tan
+    [0.55, 0.48, 0.41],   # brownish
+    [0.60, 0.52, 0.44],   # warm buff-brown
+    [0.48, 0.47, 0.45],   # darker grey
+    [0.69, 0.65, 0.58],   # pale buff
+])
+STONE_W = np.array([0.24, 0.22, 0.16, 0.14, 0.12, 0.12])
+
+
+def gen_stone(seed=101, size=1024):
+    """Coursed fieldstone (random rubble laid in rough courses), recessed
+    sandy mortar.  ~2 yd tile -> 6 courses of ~30 cm stones."""
+    rng = np.random.default_rng(seed)
+    H = W = size
+    pts = []
+    rows = 6
+    for r in range(rows):
+        nper = int(rng.integers(3, 6))
+        wv = rng.uniform(0.6, 1.5, nper)
+        xs = np.cumsum(wv) / wv.sum() * W + rng.random() * W
+        xs = xs - wv / wv.sum() * W * 0.5
+        y = (r + 0.5) * H / rows + rng.normal(0, 7, nper)
+        for x, yy in zip(xs, y):
+            pts.append((x % W, yy % H))
+            # occasional small filler stone in a corner (galleting)
+        if rng.random() < 0.6:
+            pts.append(((rng.random() * W), (r + rng.choice([0.08, 0.92])) * H / rows))
+    pts = np.array(pts)
+    n = len(pts)
+    small = np.zeros(n, bool)
+    small[[i for i in range(n) if (pts[i, 1] / (H / rows)) % 1 < 0.15 or (pts[i, 1] / (H / rows)) % 1 > 0.85]] = True
+    wts = np.where(small, -2600.0, rng.uniform(-400, 900, n))
+    sx, sy = 1.0, 1.9
+    wx = noise_fbm(rng, H, W, 3, 24, 1.4) * 4.0 + noise_fbm(rng, H, W, 20, 120, 1.0) * 0.8
+    wy = noise_fbm(rng, H, W, 3, 24, 1.4) * 4.0 + noise_fbm(rng, H, W, 20, 120, 1.0) * 0.8
+    ids, edge, ox, oy = voronoi_torus(H, W, pts, wts, sx, sy, warp=(wx, wy))
+    # mortar joint ~1.5-2 cm (8-10 px at 2 yd / 1024)
+    chip = noise_fbm(rng, H, W, 10, 160, 0.9)
+    jw = 7.0 + 1.8 * noise_fbm(rng, H, W, 2, 12, 1.2)
+    e = edge - jw + 1.3 * chip
+    stone = e > 0
+    pick = rng.choice(len(STONE_COLS), n, p=STONE_W / STONE_W.sum())
+    scol = STONE_COLS[pick] * (1 + rng.normal(0, 0.05, n))[:, None]
+    tilt = rng.normal(0, 0.0003, (n, 2))
+    bulge = rng.uniform(0.6, 1.3, n)
+    rough = noise_fbm(rng, H, W, 6, 200, 1.1)
+    rough2 = noise_fbm(rng, H, W, 40, 400, 0.6)
+    face = (smoothstep(0, 12, e) ** 0.6 * 0.30 + smoothstep(0, 80, e) * 0.30 * bulge[ids]
+            + tilt[ids, 0] * ox * 40 + tilt[ids, 1] * oy * 40)
+    face = face + 0.045 * rough + 0.010 * rough2
+    mort_n = noise_fbm(rng, H, W, 30, 400, 0.7)
+    h = np.where(stone, 0.20 + face, 0.012 * mort_n + 0.04 * smoothstep(-jw, 0, e) - 0.02)
+    # stone colour: base + mottling + faint iron staining + speckle + strata
+    mott = noise_fbm(rng, H, W, 4, 60, 1.2)
+    rust = smoothstep(0.8, 2.0, noise_fbm(rng, H, W, 3, 30, 1.3))
+    spk = noise_fbm(rng, H, W, 200, 512, 0.2)
+    sang = rng.normal(0, 0.3, n)
+    strata_on = rng.random(n) < 0.35
+    strata = np.sin((ox * np.sin(sang[ids]) + oy * np.cos(sang[ids])) * 0.35 + 1.5 * mott)
+    col = scol[ids] * (1 + 0.045 * mott + 0.02 * rough)[..., None]
+    col = col * (1 + 0.035 * strata * strata_on[ids])[..., None]
+    col = col + (np.array([0.60, 0.44, 0.30]) - col) * (0.25 * rust)[..., None]
+    xtal = rng.random((H, W))
+    col = col * (1 + 0.05 * np.clip(spk, -2, 2) + 0.07 * (xtal - 0.5))[..., None]
+    col = col * (1 - 0.35 * (xtal > 0.985))[..., None] * (1 + 0.18 * (xtal < 0.01))[..., None]  # dark mica / bright quartz flecks
+    pits = smoothstep(2.2, 3.0, noise_fbm(rng, H, W, 60, 300, 0.4))
+    col = col * (1 - 0.35 * pits)[..., None]
+    h = h - 0.03 * pits * stone
+    lich = smoothstep(1.5, 2.3, noise_fbm(rng, H, W, 6, 50, 1.0))
+    col = col + (np.array([0.72, 0.72, 0.66]) - col) * (0.30 * lich)[..., None]
+    # mortar: light sandy beige-grey with grit
+    grit = noise_fbm(rng, H, W, 120, 512, 0.3)
+    mcol = np.array([0.64, 0.61, 0.55]) * (1 + 0.04 * mort_n + 0.06 * grit + 0.05 * (xtal - 0.5))[..., None]
+    col = np.where(stone[..., None], col, mcol)
+    hb = blur(h, 0.8)
+    nrm = height_to_normal(hb, 7.0)
+    lit = nrm @ BAKE_L
+    ao = np.clip(1 - 1.1 * ao_from_height(hb, (2.5, 9.0), (1.0, 0.5)), 0.62, 1)
+    col = col * (ao * (0.80 + 0.26 * lit))[..., None]
+    return np.clip(col, 0, 1), nrm
+
+
+# --------------------------------------------------------------------------
+# loblolly pine bark (colour albedo)
+# --------------------------------------------------------------------------
+
+def gen_bark_loblolly(seed=111, W=512, H=1024):
+    """Large irregular plates (power Voronoi stretched along V) separated by
+    deep dark furrows.  Each plate is built from thin papery flakes (a finer
+    Voronoi) at different layer heights: the uppermost, weathered layers are
+    grey-brown, freshly exposed lower layers are red-cinnamon."""
+    rng = np.random.default_rng(seed)
+    n = 24
+    sx, sy = 1.0, 0.45                 # plates ~2.2x taller than wide
+    pts = lloyd_points(rng, n, H, W, sx, sy, iters=3)
+    wts = rng.uniform(-1, 1, n) * 1800
+    wx = noise_fbm(rng, H, W, 2, 20, 1.3, ax=1, ay=2) * 7 + noise_fbm(rng, H, W, 16, 120, 1.0) * 1.5
+    wy = noise_fbm(rng, H, W, 2, 20, 1.3, ax=1, ay=2) * 7 + noise_fbm(rng, H, W, 16, 120, 1.0) * 1.5
+    ids, edge, ox, oy = voronoi_torus(H, W, pts, wts, sx, sy, warp=(wx, wy))
+    fib = noise_fbm(rng, H, W, 6, 90, 1.0, ax=1, ay=4)         # vertical fibre
+    fine = noise_fbm(rng, H, W, 30, 300, 0.6)
+    # edge distance in pixels (the metric is anisotropic) and edge orientation
+    gx = (np.roll(edge, -1, 1) - np.roll(edge, 1, 1)) * 0.5
+    gy = (np.roll(edge, -1, 0) - np.roll(edge, 1, 0)) * 0.5
+    gm = np.sqrt(gx * gx + gy * gy)
+    gm = blur(np.clip(gm, 0.3, 1.2), 2.0)
+    epx = edge / gm
+    vert = blur(np.abs(gx) / (np.sqrt(gx * gx + gy * gy) + 1e-6), 3.0)   # 1 = furrow runs vertically
+    fw = (3.5 + 8.0 * vert) * (1 + 0.35 * noise_fbm(rng, H, W, 2, 10, 1.2))  # furrow half-width (px)
+    e = epx - fw + 1.8 * noise_fbm(rng, H, W, 6, 40, 1.1)
+    plate = e > 0
+    # flakes: ~10 per plate, wider than tall, irregular
+    m = 170
+    p2 = rng.random((m, 2)) * [W, H]
+    w2x = noise_fbm(rng, H, W, 6, 60, 1.2) * 3
+    w2y = noise_fbm(rng, H, W, 6, 60, 1.2) * 3
+    ids2, edge2, _, oy2 = voronoi_torus(H, W, p2, rng.uniform(-60, 60, m), 0.75, 1.0, warp=(w2x, w2y))
+    lvl = rng.random(m)                                         # flake layer 0 (deep) .. 1 (outer)
+    pl = rng.normal(0, 1, n)
+    L = np.clip(lvl[ids2] * 0.8 + 0.075 * pl[ids] + 0.15 * smoothstep(0, 40, e), 0, 1)
+    # flake edge: lips catch light, a hairline shadow under the step
+    lip = 1 - smoothstep(0.0, 2.5, edge2)
+    curl = smoothstep(-1, 1, oy2 / 20.0)                        # flakes curl a little at the lower edge
+    rise = smoothstep(0, 5, e) ** 0.6
+    h = np.where(plate, 0.40 * rise + 0.16 * L * rise + 0.02 * fib + 0.01 * fine - 0.03 * lip * rise
+                 + 0.02 * curl * rise,
+                 -0.30 + 0.03 * fib + 0.12 * smoothstep(-fw, 0, e))
+    hb = blur(h, 0.7)
+    nrm = height_to_normal(hb, 20.0)
+    # colours (sRGB): per-plate tone between weathered grey-brown and
+    # reddish-brown; red-cinnamon only where the outer flakes have fallen
+    grey = np.array([0.45, 0.39, 0.35])
+    rbrown = np.array([0.50, 0.33, 0.24])
+    red = np.array([0.58, 0.31, 0.19])
+    furrow = np.array([0.085, 0.055, 0.04])
+    tone = rng.random(n)
+    pc = grey + (rbrown - grey) * (tone[ids] * 0.8 + 0.2 * smoothstep(-1, 1, noise_fbm(rng, H, W, 3, 30, 1.0)))[..., None]
+    pc = pc * (0.90 + 0.18 * lvl[ids2])[..., None]
+    exposed = 1 - smoothstep(0.10, 0.20, lvl[ids2] + 0.05 * fine)
+    pc = pc + (red - pc) * (0.70 * exposed)[..., None]
+    pc = pc * (1 + 0.025 * fib + 0.035 * fine)[..., None]
+    gapk = rng.uniform(0.05, 0.35, m)[ids2]
+    pc = pc * (1 - gapk * lip * rise)[..., None]
+    fc = furrow * (1 + 0.8 * smoothstep(-4, 0, e))[..., None] * (1 + 0.10 * fib)[..., None]
+    col = np.where(plate[..., None], pc, fc)
+    col = col * (1 - 0.25 * (1 - smoothstep(0, 3, e)) * plate)[..., None]   # plate rim
+    Lv = np.array([-0.4, 0.5, 0.77])
+    lit = np.clip(nrm @ (Lv / np.linalg.norm(Lv)), 0, 1)
+    col = col * (0.78 + 0.32 * lit)[..., None]
+    return np.clip(col, 0, 1), nrm
+
+
+# --------------------------------------------------------------------------
+# creek ripples (normal map)
+# --------------------------------------------------------------------------
+
+def gen_water_creek(seed=121, size=512):
+    """Shallow fast water: crests mostly across the flow (flow along V),
+    choppy small wavelets plus a few longer standing waves.  Tiles."""
+    rng = np.random.default_rng(seed)
+    yy, xx = (np.mgrid[0:size, 0:size] + 0.5) / size
+    wx = noise_fbm(rng, size, size, 1, 6, 1.4)
+    wy = noise_fbm(rng, size, size, 1, 6, 1.4)
+    h = np.zeros((size, size))
+    used = set()
+    n = 0
+    while n < 56:
+        k = 6 + 30 * rng.random() ** 1.2
+        ang = np.pi / 2 + rng.normal(0, 0.55)
+        kx = int(round(k * np.cos(ang)))
+        ky = int(round(k * np.sin(ang)))
+        if (kx, ky) in used or (-kx, -ky) in used or (kx == 0 and ky == 0):
+            continue
+        used.add((kx, ky))
+        kk = np.hypot(kx, ky)
+        ph = 2 * np.pi * (kx * xx + ky * yy) + rng.random() * 2 * np.pi + 1.2 * (wx * np.cos(ang) + wy * np.sin(ang))
+        w = (np.sin(ph) + 1) * 0.5
+        h += kk ** -1.5 * w ** 2.2      # sharper crests, broad troughs
+        n += 1
+    h = (h - h.mean()) / h.std()
+    chop = noise_band(rng, size, size, 26, 8, ax=1.0, ay=0.6)
+    h = h + 0.07 * chop
+    h = blur(h, 1.2)
+    return normal_target(h, 0.20)
+
+
+# --------------------------------------------------------------------------
 # contact sheet / main
 # --------------------------------------------------------------------------
 
@@ -1165,6 +1736,44 @@ def main(argv):
         t = time.time()
         save_webp(normal_to_rgb(gen_water()), "water_n", 92)
         print(f"water {time.time() - t:.1f}s")
+    # ---- Augusta set ----
+    def colour(name, col, nrm, q=86):
+        c8 = to_u8(col)
+        m = c8.reshape(-1, 3).mean(0) / 255
+        print(f"  {name}: sRGB mean = {m[0]:.3f} {m[1]:.3f} {m[2]:.3f}")
+        save_webp(c8, name, q)
+        save_webp(normal_to_rgb(nrm), name + "_n", NORMAL_Q)
+
+    if run("pinestraw"):
+        t = time.time()
+        col, nrm = gen_pinestraw()
+        colour("pinestraw", col, nrm, q=82)
+        print(f"pinestraw {time.time() - t:.1f}s")
+    if run("sand_white"):
+        t = time.time()
+        alb, nrm = gen_sand_white()
+        detail("sand_white", alb, nrm, q=88)
+        print(f"sand_white {time.time() - t:.1f}s")
+    if run("turf_augusta"):
+        t = time.time()
+        alb, nrm, _ = gen_grass("turf_augusta", 1024, 14, 175_000, (5, 11), (1.7, 2.7), -np.pi / 2, 0.32,
+                                0.07, 2.2, patch_amp=0.02, gap_dark=0.36, tip_warm=0.05)
+        detail("turf_augusta", alb, nrm)
+        print(f"turf_augusta {time.time() - t:.1f}s")
+    if run("stone"):
+        t = time.time()
+        col, nrm = gen_stone()
+        colour("stone", col, nrm)
+        print(f"stone {time.time() - t:.1f}s")
+    if run("bark_loblolly"):
+        t = time.time()
+        col, nrm = gen_bark_loblolly()
+        colour("bark_loblolly", col, nrm)
+        print(f"bark_loblolly {time.time() - t:.1f}s")
+    if run("water_creek"):
+        t = time.time()
+        save_webp(normal_to_rgb(gen_water_creek()), "water_creek_n", 92)
+        print(f"water_creek {time.time() - t:.1f}s")
     print(f"total {time.time() - t_all:.1f}s")
     return stats
 
