@@ -16,7 +16,8 @@
 const TAU = Math.PI * 2;
 const EDGE = 6; // terrain height at the edge of the course area
 const STEP = 1; // terrain grid spacing, yards
-import { paintAtlas, makeTrees, makeTreeMaterials, makeGrassGeo, makeGrassMaterial } from './flora.js?v=16';
+import { paintAtlas, makeTrees, makeTreeMaterials, makeGrassGeo, makeGrassMaterial } from './flora.js?v=17';
+import { makeProps, makePropMaterial } from './props.js?v=17';
 const VERSIONED = new URL(import.meta.url).search; // same ?v= as this file
 
 // Colours and light for each course (sRGB hex).
@@ -29,9 +30,9 @@ const LOOKS = {
   },
   augusta: {
     skyTop: '#2f84df', skyHorizon: '#d6ecf8', sun: '#fff3dd', sunI: 2.7, hemiSky: '#d2e8ff', hemiGround: '#4c7a37', hemiI: 1.25, exposure: 1.0,
-    ob: '#3f8a3a', deep: '#4c9a40', rough: '#5aa847', fairway: '#7ccb58', fairway2: '#6dbd4f', fringe: '#79c656', green: '#93dd69', green2: '#85d25e',
+    ob: '#3b8238', deep: '#43893a', rough: '#4f9c40', fairway: '#62bb4c', fairway2: '#58ae45', fringe: '#5fb449', green: '#76ca5a', green2: '#6cbf52',
     sand: '#fbf6ea', sandLip: '#d2c8b0', bed: '#2a5f63', water: '#2a9fb8', deepWater: '#176a86', tree: ['#2e7a3c', '#3c8f46', '#256a36'], trunk: '#8a5a3a',
-    hills: ['#3f8a45', '#56a04f', '#357a40'], sunEl: 0.9, cloud: 0.8, fogNear: 260, fogFar: 1700, hillsH: 1.2, straw: '#c79b62', flowers: true, env: 'park',
+    hills: ['#3f8a45', '#56a04f', '#357a40'], sunEl: 0.9, cloud: 0.8, fogNear: 260, fogFar: 1700, hillsH: 1.2, straw: '#8e5c34', flowers: true, aug: true, env: 'park',
   },
   standrews: {
     skyTop: '#6f8aa6', skyHorizon: '#d3dbe1', sun: '#f6efe2', sunI: 2.1, hemiSky: '#e4ecf2', hemiGround: '#8c8f55', hemiI: 1.4, exposure: 0.95,
@@ -148,13 +149,30 @@ function paintTurf(hole, box, px, L) {
   };
   // Pine straw under Augusta's trees.
   if (L.straw) {
+    // Beds of straw under the pines, with ragged edges, spreading into one
+    // carpet through the woods beyond the corridor.
     c.fillStyle = L.straw;
     c.beginPath();
     for (const t of hole.trees) {
-      c.moveTo(t.x + t.r * 1.6, t.y);
-      c.arc(t.x, t.y, t.r * 1.6, 0, TAU);
+      const rr = t.r * (1.9 + r() * 0.6);
+      for (let k = 0; k < 3; k++) {
+        const a = r() * TAU, d = r() * t.r * 0.5, x = t.x + Math.cos(a) * d, y = t.y + Math.sin(a) * d, q = rr * (0.75 + r() * 0.3);
+        c.moveTo(x + q, y);
+        c.arc(x, y, q, 0, TAU);
+      }
     }
     c.fill('nonzero');
+    // Fallen needles thin out onto the grass at the edge of each bed.
+    for (const t of hole.trees) {
+      for (let k = 0; k < 6; k++) {
+        const a = r() * TAU, d = t.r * (1.7 + r() * 1.1), q = 1.5 + r() * 3;
+        c.globalAlpha = 0.35 + r() * 0.3;
+        c.beginPath();
+        c.arc(t.x + Math.cos(a) * d, t.y + Math.sin(a) * d, q, 0, TAU);
+        c.fill();
+      }
+    }
+    c.globalAlpha = 1;
   }
   discs(0, Infinity, hole.roughW);
   c.fillStyle = L.rough;
@@ -266,6 +284,7 @@ function paintTurf(hole, box, px, L) {
   }
   // Bridges.
   for (const br of hole.bridges || []) {
+    if (br.style === 'stone') continue; // modelled in 3D
     c.save();
     c.translate(br.x, br.y);
     c.rotate(br.ang);
@@ -532,6 +551,25 @@ export class View3D {
         this.detU.uDetOn.value = 1;
       })
       .catch(() => {}); // keep the plain look if they can't load
+    // Extra Augusta surfaces, each optional on its own (grey until loaded).
+    // Pine straw is a colour texture; the rest are neutral detail maps.
+    const straw = one(142, 92, 52);
+    straw.colorSpace = T.SRGBColorSpace;
+    const extra = {
+      uDStrawA: 'pinestraw', uDStrawN: 'pinestraw_n', uDWSandA: 'sand_white', uDWSandN: 'sand_white_n',
+      uDAugA: 'turf_augusta', uDAugN: 'turf_augusta_n',
+    };
+    for (const [u, f] of Object.entries(extra)) {
+      this.detU[u] = { value: u === 'uDStrawA' ? straw : f.endsWith('_n') ? flat : grey };
+      load(f)
+        .then((t) => {
+          t.wrapS = t.wrapT = T.RepeatWrapping;
+          t.colorSpace = u === 'uDStrawA' ? T.SRGBColorSpace : T.NoColorSpace;
+          t.anisotropy = Math.min(16, aniso);
+          this.detU[u].value = t;
+        })
+        .catch(() => {});
+    }
   }
 
   // Pieces that don't depend on the hole: geometries, materials, pools.
@@ -566,17 +604,41 @@ export class View3D {
     this.atlasTex.colorSpace = T.SRGBColorSpace;
     this.atlasTex.anisotropy = 4;
     this.treeKinds = makeTrees(T);
+    this.props = makeProps(T);
+    this.propMat = makePropMaterial(T);
     const mats = makeTreeMaterials(T, this.atlasTex, this.timeU);
     this.leafMat = mats.leaf;
     this.bodyMat = mats.body;
     this.barkMat = mats.bark;
+    this.bloomMat = mats.bloom;
+    // Loblolly pines get their own plated bark.
+    this.barkLMat = this.barkMat.clone();
+    this.barkLMat.onBeforeCompile = this.barkMat.onBeforeCompile;
+    this.barkLMat.customProgramCacheKey = this.barkMat.customProgramCacheKey;
     // Swap in the painted foliage atlas and bark when they arrive.
-    const tl = new T.TextureLoader();
+    const tl0 = new T.TextureLoader(), waits = [];
+    // Each load resolves (loaded or not) so distant-tree impostors can be
+    // baked once the real textures are in.
+    const tl = { load: (url, cb) => waits.push(new Promise((ok) => tl0.load(url, (t) => { cb(t); ok(); }, undefined, ok))) };
     tl.load(new URL('../assets/tex/foliage.png', import.meta.url).href + VERSIONED, (t) => {
       t.colorSpace = T.SRGBColorSpace;
       t.anisotropy = 4;
       this.leafMat.map = this.bodyMat.map = t;
       this.leafMat.needsUpdate = this.bodyMat.needsUpdate = true;
+    });
+    tl.load(new URL('../assets/tex/blossoms.png', import.meta.url).href + VERSIONED, (t) => {
+      t.colorSpace = T.SRGBColorSpace;
+      t.anisotropy = 4;
+      this.bloomMat.map = t;
+      this.bloomMat.needsUpdate = true;
+    });
+    tl.load(new URL('../assets/tex/bark_loblolly.webp', import.meta.url).href + VERSIONED, (t) => {
+      t.colorSpace = T.SRGBColorSpace;
+      t.wrapS = t.wrapT = T.RepeatWrapping;
+      t.anisotropy = 4;
+      this.barkLMat.map = t;
+      this.barkLMat.color.setScalar(1.25);
+      this.barkLMat.needsUpdate = true;
     });
     tl.load(new URL('../assets/tex/bark.webp', import.meta.url).href + VERSIONED, (t) => {
       t.colorSpace = T.SRGBColorSpace;
@@ -586,10 +648,11 @@ export class View3D {
       this.barkMat.color.setScalar(1.35);
       this.barkMat.needsUpdate = true;
     });
+    this.treeTexReady = Promise.all(waits);
     this.grassU = {
       uTime: this.timeU, uMask: { value: null }, uHeight: { value: null }, uTurf: { value: null },
       uBox: { value: new T.Vector4() }, uGrid: { value: new T.Vector4() }, uCentre: { value: new T.Vector2() },
-      uSpacing: { value: 0.55 }, uFar: { value: 44 },
+      uSpacing: { value: 0.55 }, uFar: { value: 44 }, uRoughH: { value: 1 },
       uBalls: { value: [0, 1, 2, 3].map(() => new T.Vector4()) },
     };
     {
@@ -710,6 +773,7 @@ export class View3D {
     this.buildWater(mask, L, group);
     // Trees, bushes and grass.
     this.buildTrees(hole, L, group);
+    this.buildProps(hole, L, group);
     this.buildGrass();
     // Flag, cup, tee markers.
     this.buildPin(hole, L, group);
@@ -771,16 +835,54 @@ export class View3D {
     blur(play, Math.round(4 / step));
     const H = new Float32Array(N);
     const t = hole.tee;
+    // The lie of the land: an elevation profile along the hole (spec.elev,
+    // [[yards along the line, height], ...]) lifts or drops everything
+    // around it, so 10 falls away from the tee and 18 climbs to the green.
+    const elev = hole.elev || (hole.spec && hole.spec.elev);
+    const hasLand = elev || (hole.mounds && hole.mounds.length);
+    const E = new Float32Array(N);
+    let eMean = 0;
+    if (hasLand) {
+      const at = (sv) => {
+        if (!elev) return 0;
+        if (sv <= elev[0][0]) return elev[0][1];
+        for (let q = 1; q < elev.length; q++) {
+          if (sv <= elev[q][0]) {
+            const a = elev[q - 1], b = elev[q], u = (sv - a[0]) / (b[0] - a[0] || 1);
+            return a[1] + (b[1] - a[1]) * (u * u * (3 - 2 * u));
+          }
+        }
+        return elev[elev.length - 1][1];
+      };
+      // Distance along the line on a coarse grid, then smoothed onto the grid.
+      const C = 4, cw = Math.ceil(box.w / C) + 2, ch = Math.ceil(box.h / C) + 2;
+      const ce = new Float32Array(cw * ch);
+      for (let j = 0; j < ch; j++) for (let i = 0; i < cw; i++) ce[j * cw + i] = hole.heightAt ? hole.heightAt(box.x + i * C, box.y + j * C) : at(hole.nearest(box.x + i * C, box.y + j * C)[1]);
+      for (let j = 0; j < gh; j++) {
+        for (let i = 0; i < gw; i++) {
+          const fx = (i * step) / C, fy = (j * step) / C;
+          const ci = Math.min(cw - 2, Math.floor(fx)), cj = Math.min(ch - 2, Math.floor(fy)), u = fx - ci, v = fy - cj, c = cj * cw + ci;
+          E[j * gw + i] = (ce[c] * (1 - u) + ce[c + 1] * u) * (1 - v) + (ce[c + cw] * (1 - u) + ce[c + cw + 1] * u) * v;
+        }
+      }
+      blur(E, Math.round(3 / step));
+      for (let k = 0; k < N; k++) eMean += E[k];
+      eMean /= N;
+    }
+    // Augusta rolls gently into the woods; elsewhere the land rises at the edges.
+    this.edgeZ = (L.aug ? 1.5 : EDGE) + eMean;
     for (let j = 0; j < gh; j++) {
       for (let i = 0; i < gw; i++) {
         const k = j * gw + i;
         const x = box.x + i * step, y = box.y + j * step;
         const far = Math.pow(1 - Math.min(1, play[k] * 1.6), 1.4);
-        const hills = far * (2.4 + 7 * noise(x / 80, y / 80) + 1.8 * noise(x / 24, y / 24)) * L.hillsH;
+        const hills = L.aug
+          ? far * far * (0.6 + 2.2 * noise(x / 70, y / 70) + 0.8 * noise(x / 22, y / 22))
+          : far * (2.4 + 7 * noise(x / 80, y / 80) + 1.8 * noise(x / 24, y / 24)) * L.hillsH;
         const edge = Math.min(i, j, gw - 1 - i, gh - 1 - j) * step;
         const toEdge = Math.max(0, 1 - edge / 40);
-        let h = base[k] + hills;
-        h = h * (1 - toEdge) + EDGE * toEdge;
+        let h = base[k] + hills + E[k];
+        h = h * (1 - toEdge) + this.edgeZ * toEdge;
         if (Math.hypot(x - t.x, y - t.y) < t.ry + 2) h += 0.35;
         H[k] = h;
       }
@@ -793,9 +895,12 @@ export class View3D {
         const d = sdAt(sd.S, x, y);
         if (d > 2) continue;
         const k = j * gw + i;
-        const bowl = -0.75 * Math.pow(Math.min(1, Math.max(0, -d) / 2.2), 0.6);
+        // A smooth dish: a sharp drop at the edge saws up on the 1 yd mesh;
+        // the shader's face lighting gives the crisp flashed edge instead.
+        const t = Math.min(1, Math.max(0, -d) / 2.6);
+        const bowl = -0.75 * t * t * (3 - 2 * t);
         const lip = d > 0 ? 0.16 * (1 - d / 2) : 0.16 * Math.max(0, 1 + d / 0.35);
-        H[k] = H[k] * (d > 0 ? 1 : 0.3) + bowl + lip;
+        H[k] += bowl + lip; // relative to the lie of the land around it
       }
     }
     // The green's real contours (the same ones the putts roll on), a touch
@@ -898,7 +1003,8 @@ export class View3D {
         cFair: { value: col(L.fairway) }, cFair2: { value: col(L.fairway2) }, cFringe: { value: col(L.fringe) },
         cGreen: { value: col(L.green) }, cGreen2: { value: col(L.green2) }, cSand: { value: col(L.sand) },
         cLip: { value: col(L.sandLip) }, cBed: { value: col(L.bed) }, cRock: { value: col(L.rock || L.sandLip) },
-        uSea: { value: hole.water.some((w) => w.sea) ? 1 : 0 },
+        uSea: { value: hole.water.some((w) => w.sea) ? 1 : 0 }, uAug: { value: L.aug ? 1 : 0 },
+        cStraw: { value: col(L.straw || L.sandLip) },
       });
       sh.vertexShader = 'varying vec3 vWP; varying vec3 vWN;\n' + sh.vertexShader
         .replace('#include <begin_vertex>', '#include <begin_vertex>\n vWP = (modelMatrix * vec4(transformed, 1.0)).xyz;')
@@ -906,7 +1012,8 @@ export class View3D {
       sh.fragmentShader = `varying vec3 vWP; varying vec3 vWN;
         uniform sampler2D uSdf, uAlong;
         uniform vec4 uBox, uTee; uniform vec2 uTeeR, uFw; uniform vec3 uGreen;
-        uniform vec3 cFair, cFair2, cFringe, cGreen, cGreen2, cSand, cLip, cBed, cRock; uniform float uSea;
+        uniform vec3 cFair, cFair2, cFringe, cGreen, cGreen2, cSand, cLip, cBed, cRock, cStraw; uniform float uSea, uAug;
+        uniform sampler2D uDStrawA, uDStrawN, uDWSandA, uDWSandN, uDAugA, uDAugN;
         uniform sampler2D uDFairA, uDFairN, uDGreenA, uDGreenN, uDRoughA, uDRoughN, uDSandA, uDSandN, uDSoilA, uDSoilN, uDMacro;
         uniform float uDetOn;
         float inside(float d) { float w = max(fwidth(d) * 0.75, 0.003); return 1.0 - smoothstep(-w, w, d); }
@@ -933,7 +1040,15 @@ export class View3D {
           float su = (alongS - uFw.x + 30.0) / 9.0;
           float sw = clamp(fwidth(su) * 1.5, 0.02, 0.5);
           float stripe = smoothstep(0.5 - sw, 0.5 + sw, abs(fract(su * 0.5) - 0.5) * 2.0);
-          col = mix(col, cFair2 * 0.96, inside(dF - 1.2) * uFw.y);
+          if (uAug > 0.5) {
+            // Augusta mows from green to tee: long passes that follow the
+            // fairway's shape, light and dark only by a whisker.
+            float pu = -dF / 4.2;
+            float pw = clamp(fwidth(pu) * 1.5, 0.02, 0.5);
+            float pass = smoothstep(0.5 - pw, 0.5 + pw, abs(fract(pu * 0.5) - 0.5) * 2.0);
+            stripe = mix(pass, stripe, 0.18) * 0.55;
+          }
+          col = mix(col, cFair2 * (uAug > 0.5 ? 0.9 : 0.96), inside(dF - (uAug > 0.5 ? 2.2 : 1.2)) * uFw.y);
           float wFair = inside(dF) * uFw.y;
           col = mix(col, mix(cFair, cFair2, stripe), wFair);
           // Tee box with fine stripes.
@@ -954,23 +1069,45 @@ export class View3D {
           float chk = sin(gq.x * 3.14159) * sin(gq.y * 3.14159);
           float cw = clamp(fwidth(chk) * 1.5, 0.02, 1.0);
           float checker = smoothstep(-cw, cw, chk);
+          if (uAug > 0.5) {
+            float gu = gq.x * 0.8;
+            float gw2 = clamp(fwidth(gu) * 1.5, 0.02, 0.5);
+            checker = 0.35 + 0.3 * smoothstep(0.5 - gw2, 0.5 + gw2, abs(fract(gu * 0.5) - 0.5) * 2.0);
+          }
           float wGreen = inside(dG);
           col = mix(col, mix(cGreen, cGreen2, checker), wGreen);
           wFringe -= wGreen;
           // Bunkers: a dark lip, then sand that brightens toward the middle.
-          col = mix(col, cLip, inside(dS - 0.55));
+          // Augusta's bunkers are flashed right up to a clean grass edge.
+          col = mix(col, cLip, inside(dS - 0.55) * (1.0 - uAug * 0.85));
           float wSand = inside(dS);
           vec3 sandCol = mix(cSand * vec3(0.9, 0.84, 0.72), cSand * vec3(1.1, 1.04, 0.9), smoothstep(0.0, 2.5, -dS));
+          if (uAug > 0.5) sandCol = cSand * mix(0.93, 1.03, smoothstep(0.0, 1.8, -dS));
+          // The face of each bunker: sloping up to the lip, lit by the sun.
+          vec2 sGrad = vec2(0.0);
+          if (abs(dS) < 3.0) {
+            vec2 e = vec2(0.5 / uBox.z, 0.0), f = vec2(0.0, 0.5 / uBox.w);
+            sGrad = vec2(texture2D(uSdf, suv + e).b - texture2D(uSdf, suv - e).b, texture2D(uSdf, suv + f).b - texture2D(uSdf, suv - f).b);
+          }
+          float face = wSand * (1.0 - smoothstep(0.0, 2.4, -dS));
           col = mix(col, sandCol, wSand);
           // Grass banks around bunkers and greens catch a little shade.
           col *= 1.0 - 0.12 * (inside(dS - 1.6) - inside(dS)) * (1.0 - wGreen);
+          float wStraw = uAug * smoothstep(0.0, 0.06, diffuseColor.r - diffuseColor.g * 0.92) * (1.0 - wFair) * (1.0 - wSand) * (1.0 - wBed);
+          // Needles keep the painted shade under the trees.
+          if (wStraw > 0.002) {
+            float sh = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11)) / max(dot(cStraw, vec3(0.3, 0.59, 0.11)), 0.01);
+            vec3 sa = det(uDStrawA, vWP.xy, 2.5, smoothstep(0.42, 0.58, texture2D(uDMacro, vWP.xy / 23.0 + 0.5).r)).rgb;
+            sa = mix(sa, vec3(dot(sa, vec3(0.3, 0.59, 0.11))), 0.25) * vec3(0.82, 0.8, 0.82);
+            col = mix(col, sa * clamp(sh, 0.3, 1.1), wStraw);
+          }
           diffuseColor.rgb = col;
 
           // Crisp detail textures on every surface, fading with distance.
           float dCam = distance(cameraPosition, vWP);
           float macro = texture2D(uDMacro, vWP.xy / 61.0).r;
           float sel = smoothstep(0.42, 0.58, texture2D(uDMacro, vWP.xy / 23.0 + 0.5).r);
-          float wRough = clamp(1.0 - wFair - wGreen - max(wFringe, 0.0) - wSand - wBed, 0.0, 1.0);
+          float wRough = clamp(1.0 - wFair - wGreen - max(wFringe, 0.0) - wSand - wBed - wStraw, 0.0, 1.0);
           vec4 dA = vec4(0.5), dN = vec4(0.5, 0.5, 1.0, 1.0);
           // Detail only where it can be seen; normal maps only up close.
           bool nearN = dCam < 140.0;
@@ -978,15 +1115,22 @@ export class View3D {
             dA = vec4(0.0);
             if (nearN) dN = vec4(0.0);
             float wf = wFair + max(wFringe, 0.0);
-            if (wf > 0.002) { dA += wf * det(uDFairA, vWP.xy, 1.1, sel); if (nearN) dN += wf * det(uDFairN, vWP.xy, 1.1, sel); }
+            if (wf > 0.002) {
+              if (uAug > 0.5) { dA += wf * det(uDAugA, vWP.xy, 1.0, sel); if (nearN) dN += wf * det(uDAugN, vWP.xy, 1.0, sel); }
+              else { dA += wf * det(uDFairA, vWP.xy, 1.1, sel); if (nearN) dN += wf * det(uDFairN, vWP.xy, 1.1, sel); }
+            }
             if (wGreen > 0.002) { dA += wGreen * det(uDGreenA, vWP.xy, 0.9, sel); if (nearN) dN += wGreen * det(uDGreenN, vWP.xy, 0.9, sel); }
             if (wRough > 0.002) { dA += wRough * det(uDRoughA, vWP.xy, 1.8, sel); if (nearN) dN += wRough * det(uDRoughN, vWP.xy, 1.8, sel); }
-            if (wSand > 0.002) { dA += wSand * det(uDSandA, vWP.xy, 2.0, sel); if (nearN) dN += wSand * det(uDSandN, vWP.xy, 2.0, sel); }
+            if (wSand > 0.002) {
+              if (uAug > 0.5) { dA += wSand * det(uDWSandA, vWP.xy, 1.6, sel); if (nearN) dN += wSand * det(uDWSandN, vWP.xy, 1.6, sel); }
+              else { dA += wSand * det(uDSandA, vWP.xy, 2.0, sel); if (nearN) dN += wSand * det(uDSandN, vWP.xy, 2.0, sel); }
+            }
+            if (wStraw > 0.002) { dA += wStraw * vec4(0.5); if (nearN) dN += wStraw * det(uDStrawN, vWP.xy, 2.5, sel); }
             if (wBed > 0.002) { dA += wBed * det(uDSoilA, vWP.xy, 3.0, sel); if (nearN) dN += wBed * det(uDSoilN, vWP.xy, 3.0, sel); }
           }
           // A coarser pass of the same grass so the mid-distance isn't flat.
           if (uDetOn > 0.5 && dCam > 4.0 && dCam < 160.0) {
-            float wg = 1.0 - wSand - wBed;
+            float wg = 1.0 - wSand - wBed - wStraw;
             vec2 mp = rot2(0.7) * vWP.xy / 6.3;
             vec3 midA = mix(texture2D(uDFairA, mp).rgb, texture2D(uDRoughA, mp).rgb, wRough);
             dA.rgb = mix(dA.rgb, dA.rgb * midA * 2.0, 0.6 * wg * smoothstep(4.0, 18.0, dCam));
@@ -994,8 +1138,13 @@ export class View3D {
           float detFade = 1.0 - smoothstep(60.0, 220.0, dCam);
           diffuseColor.rgb *= mix(vec3(1.0), dA.rgb * 2.0, detFade) * (1.0 + (macro - 0.5) * (0.25 + 0.3 * wRough));
           vec3 tN = dN.xyz * 2.0 - 1.0;
-          float nStr = (0.6 + 0.4 * wRough + 0.9 * wSand) * (1.0 - smoothstep(30.0, 140.0, dCam));
-          vec3 wN = normalize(vWN + (vec3(1.0, 0.0, 0.0) * tN.x + vec3(0.0, 1.0, 0.0) * tN.y) * nStr);`)
+          float nStr = (0.6 + 0.4 * wRough + 0.9 * wSand + 0.8 * wStraw) * (1.0 - smoothstep(30.0, 140.0, dCam));
+          vec3 wN = normalize(vWN + (vec3(1.0, 0.0, 0.0) * tN.x + vec3(0.0, 1.0, 0.0) * tN.y) * nStr);
+          // Bunker faces tilt toward the middle; the gradient points outward.
+          if (face > 0.0) {
+            float gl = length(sGrad);
+            if (gl > 1e-4) wN = normalize(wN - vec3(sGrad / gl, 0.0) * face * 0.9);
+          }`)
         .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
           normal = normalize(mat3(viewMatrix) * wN);`)
 ;
@@ -1036,7 +1185,7 @@ export class View3D {
     const bx0 = box.x, by0 = box.y, bx1 = box.x + box.w, by1 = box.y + box.h;
     for (const [x0, y0, x1, y1] of [[cx - big, cy - big, cx + big, by0], [cx - big, by1, cx + big, cy + big], [cx - big, by0, bx0, by1], [bx1, by0, cx + big, by1]]) {
       const pl = new T.Mesh(new T.PlaneGeometry(x1 - x0, y1 - y0), outer);
-      pl.position.set((x0 + x1) / 2, (y0 + y1) / 2, EDGE - 0.05);
+      pl.position.set((x0 + x1) / 2, (y0 + y1) / 2, this.edgeZ - 0.05);
       pl.receiveShadow = true;
       group.add(pl);
     }
@@ -1093,7 +1242,7 @@ export class View3D {
       const a = (i / 44) * TAU + r() * 0.1, d = 1300 + r() * 900;
       const rx = 180 + r() * 260, rz = (40 + r() * 90) * (0.4 + L.hillsH * 0.6);
       sc.set(rx, rx * (0.6 + r() * 0.5), rz);
-      p.set(cx + Math.cos(a) * d, cy + Math.sin(a) * d, EDGE - rz * 0.35);
+      p.set(cx + Math.cos(a) * d, cy + Math.sin(a) * d, (this.edgeZ ?? EDGE) - rz * 0.35);
       q.setFromAxisAngle(new T.Vector3(0, 0, 1), r() * TAU);
       m.compose(p, q, sc);
       hills.setMatrixAt(i, m);
@@ -1267,7 +1416,14 @@ export class View3D {
     this.treeKindsLive = [];
     const lists = {};
     hole.trees.forEach((t) => {
-      const kind = t.pine ? 'pine' : t.palm ? 'palm' : t.cypress ? 'cypress' : r() < 0.5 ? 'oak' : 'oak2';
+      let kind = t.pine ? 'pine' : t.palm ? 'palm' : t.cypress ? 'cypress' : r() < 0.5 ? 'oak' : 'oak2';
+      if (L.aug) {
+        // Augusta: tall loblollies, with dogwoods, magnolias and the like
+        // where the course data plants them.
+        const sp = { dogwood: 'dogwood', cherry: 'dogwood', magnolia: 'magnolia', holly: 'magnolia' }[t.kind];
+        kind = sp || (t.pine ? (r() < 0.5 ? 'loblolly' : 'loblolly2') : kind);
+      }
+      if (!this.treeKinds[kind]) kind = 'oak';
       (lists[kind] = lists[kind] || []).push(t);
     });
     for (const [kind, list] of Object.entries(lists)) {
@@ -1282,33 +1438,66 @@ export class View3D {
         group.add(im);
         return im;
       };
+      const barkM = kind.startsWith('loblolly') ? this.barkLMat : this.barkMat;
       const live = {
-        trunk: mk(g.trunk, this.barkMat), near: mk(g.nearBody, this.bodyMat), cards: g.nearCards ? mk(g.nearCards, this.leafMat) : null,
+        trunk: mk(g.trunk, barkM), near: mk(g.nearBody, this.bodyMat),
+        cards: g.nearCards ? mk(g.nearCards, g.cardsMat === 'bloom' ? this.bloomMat : this.leafMat) : null,
         far: mk(g.far, g.farCards ? this.leafMat : this.bodyMat), items: [],
       };
+      if (g.aspect) {
+        // Augusta's woods run to a thousand trees a hole: mid-distance trees
+        // get a plain trunk, and the furthest a baked billboard.
+        const lod = this.treeLod(kind, g);
+        live.trunkFar = mk(lod.trunkFar, barkM);
+        live.imp = mk(lod.quads, lod.mat);
+        live.imp.castShadow = true;
+        live.impBake = { kind, g, barkM };
+      }
       for (const t of list) {
-        const width = kind === 'pine' ? t.r * 2.6 : kind === 'cypress' ? t.r * 2.3 : kind === 'palm' ? t.r * 2.2 : t.r * 2.3;
         const h = t.h * (kind.startsWith('oak') ? 1.05 : 1);
+        // Models built at true proportions say how wide they want to be.
+        let width = kind === 'pine' ? t.r * 2.6 : kind === 'cypress' ? t.r * 2.3 : kind === 'palm' ? t.r * 2.2 : t.r * 2.3;
+        if (g.aspect) width = Math.max(width * 0.8, h / g.aspect);
         p.set(t.x, t.y, this.heightAt(t.x, t.y) - 0.15);
         q.setFromAxisAngle(zAxis, r() * TAU);
         s.set(width * (0.92 + r() * 0.16), width * (0.92 + r() * 0.16), h);
         m.compose(p, q, s);
         const leaf = col.set(L.tree[Math.floor(r() * L.tree.length)]).multiplyScalar(0.88 + r() * 0.24);
-        live.items.push({ x: t.x, y: t.y, w: width, m: m.toArray(), leaf: [leaf.r, leaf.g, leaf.b], bark: [trunkCol.r, trunkCol.g, trunkCol.b] });
+        const bark = kind.startsWith('loblolly') ? [0.95, 0.92, 0.9] : [trunkCol.r, trunkCol.g, trunkCol.b];
+        // Billboards are baked with the course's mean leaf colour.
+        const mean = this.meanLeaf(L);
+        const imp = [leaf.r / mean.r, leaf.g / mean.g, leaf.b / mean.b];
+        live.items.push({ x: t.x, y: t.y, w: width, m: m.toArray(), leaf: [leaf.r, leaf.g, leaf.b], bark, imp });
       }
       this.treeKindsLive.push(live);
     }
     this.treeEye = null;
+    this.bakeImpostors(L);
 
     // Azalea beds at Augusta, gorse at St Andrews.
     const bushes = [];
     for (const f of hole.flowers || []) {
-      const n = Math.round(f.rx * f.ry * 0.9);
+      const n = Math.round(f.rx * f.ry * (L.aug ? 0.5 : 0.9));
       for (let i = 0; i < n; i++) {
         const a = r() * TAU, d = Math.sqrt(r());
         const u = Math.cos(a) * f.rx * d, v = Math.sin(a) * f.ry * d, rot = f.rot || 0;
         const x = f.x + u * Math.cos(rot) - v * Math.sin(rot), y = f.y + u * Math.sin(rot) + v * Math.cos(rot);
         bushes.push([x, y, 0.7 + r() * 0.6, ['#ff5fa2', '#e23a86', '#ff8fbf', '#ffffff', '#ff6f8a', '#d81b60'][Math.floor(r() * 6)]]);
+      }
+    }
+    if (L.aug) {
+      // Banks of azaleas among the pines; each bank keeps mostly one colour.
+      const AZ = ['#ff4fa0', '#e2237f', '#ff7f9f', '#ffffff', '#f2545b', '#c2185b', '#ff9ec6'];
+      for (const f of hole.species || []) {
+        if (f.kind !== 'azalea') continue;
+        const main = AZ[Math.floor(r() * AZ.length)];
+        const n = Math.min(Math.round(f.rx * f.ry * 0.3), Math.max(f.n || 0, Math.round(f.rx * f.ry * 0.15)));
+        for (let i = 0; i < n; i++) {
+          const a = r() * TAU, d = Math.sqrt(r());
+          const u = Math.cos(a) * f.rx * d, v = Math.sin(a) * f.ry * d, rot = f.rot || 0;
+          const x = f.x + u * Math.cos(rot) - v * Math.sin(rot), y = f.y + u * Math.sin(rot) + v * Math.cos(rot);
+          bushes.push([x, y, 0.9 + r() * 0.7, r() < 0.7 ? main : AZ[Math.floor(r() * AZ.length)]]);
+        }
       }
     }
     if (L.gorse) {
@@ -1325,7 +1514,30 @@ export class View3D {
         }
       }
     }
-    if (bushes.length) {
+    if (bushes.length && L.aug && this.treeKinds.azalea) {
+      // Azaleas share the trees' near/far switching (no trunk).
+      const ka = this.treeKinds.azalea;
+      const mk = (geo, mat) => {
+        const im = new T.InstancedMesh(geo, mat, bushes.length);
+        im.userData.shared = true;
+        im.castShadow = im.receiveShadow = true;
+        im.frustumCulled = false;
+        im.count = 0;
+        im.setColorAt(0, col.set(1, 1, 1));
+        group.add(im);
+        return im;
+      };
+      const live = { trunk: null, near: mk(ka.body, this.bodyMat), cards: mk(ka.cards, this.bloomMat), far: mk(ka.far, this.bodyMat), items: [], bushes: true };
+      for (const [x, y, sz, c] of bushes) {
+        p.set(x, y, this.heightAt(x, y) - 0.08);
+        q.setFromAxisAngle(zAxis, r() * TAU);
+        s.set(sz * 1.2 * (1 + r() * 0.3), sz, sz * 0.9);
+        m.compose(p, q, s);
+        col.set(c);
+        live.items.push({ x, y, w: 0, m: m.toArray(), leaf: [col.r, col.g, col.b] });
+      }
+      this.treeKindsLive.push(live);
+    } else if (bushes.length) {
       const kb = this.treeKinds.bush;
       const body = new T.InstancedMesh(kb.body, this.bodyMat, bushes.length);
       const cards = new T.InstancedMesh(kb.cards, this.leafMat, bushes.length);
@@ -1349,6 +1561,206 @@ export class View3D {
     }
   }
 
+  meanLeaf(L) {
+    const c = new this.T.Color(0, 0, 0), t = new this.T.Color();
+    for (const h of L.tree) c.add(t.set(h));
+    return c.multiplyScalar(1 / L.tree.length);
+  }
+
+  // Cheap stand-ins for a tree kind: a plain tapered trunk and two crossed
+  // quads for a billboard (the quads' texture is baked per hole).
+  treeLod(kind, g) {
+    this.lodCache = this.lodCache || {};
+    if (this.lodCache[kind]) return this.lodCache[kind];
+    const T = this.T;
+    // Trunk radius at the base, and the crown's reach, from the real models.
+    const tp = g.trunk.attributes.position.array;
+    let r0 = 0.01;
+    for (let i = 0; i < tp.length; i += 3) if (tp[i + 2] < 0.03) r0 = Math.max(r0, Math.hypot(tp[i], tp[i + 1]));
+    let R = 0.05, top = 0.5;
+    for (const geo of [g.far, g.trunk]) {
+      const a = geo.attributes.position.array;
+      for (let i = 0; i < a.length; i += 3) { R = Math.max(R, Math.abs(a[i]), Math.abs(a[i + 1])); top = Math.max(top, a[i + 2]); }
+    }
+    const tH = kind.startsWith('loblolly') ? 0.78 : 0.45;
+    const trunkFar = new T.CylinderGeometry(r0 * 0.45, r0, tH, 6, 1, true).rotateX(Math.PI / 2).translate(0, 0, tH / 2);
+    const quads = new T.BufferGeometry();
+    const P = [], U = [], N = [];
+    for (const [ax, ay] of [[1, 0], [0, 1]]) {
+      const c = [[-R, 0], [R, 0], [R, top], [-R, top]];
+      const pts = c.map(([u, z]) => [ax * u, ay * u, z]);
+      for (const k of [0, 1, 2, 0, 2, 3]) {
+        P.push(...pts[k]);
+        U.push((c[k][0] + R) / (2 * R), c[k][1] / top);
+        N.push(0, 0, 1); // lit from above; the bake carries the shading
+      }
+    }
+    quads.setAttribute('position', new T.Float32BufferAttribute(P, 3));
+    quads.setAttribute('uv', new T.Float32BufferAttribute(U, 2));
+    quads.setAttribute('normal', new T.Float32BufferAttribute(N, 3));
+    const mat = new T.MeshBasicMaterial({ alphaTest: 0.5, side: T.DoubleSide, visible: false });
+    return (this.lodCache[kind] = { trunkFar, quads, mat, R, top });
+  }
+
+  // Render each Augusta tree kind once, side on, under this hole's light,
+  // into the texture its distant billboards use.
+  bakeImpostors(L) {
+    const T = this.T, holeGroup = this.holeGroup;
+    const jobs = (this.treeKindsLive || []).filter((k) => k.impBake);
+    if (!jobs.length) return;
+    this.treeTexReady.then(() => {
+      if (this.holeGroup !== holeGroup) return; // moved on to another hole
+      const scene = new T.Scene();
+      const sun = new T.DirectionalLight(this.sunLight.color, this.sunLight.intensity);
+      sun.position.copy(this.sunDir).multiplyScalar(100);
+      const hemi = this.hemi.clone();
+      const probe = new T.LightProbe(this.probe.sh.clone(), this.probe.intensity);
+      scene.add(sun, sun.target, hemi, probe);
+      const mean = this.meanLeaf(L);
+      const prevRT = this.renderer.getRenderTarget(), prevClear = this.renderer.getClearAlpha();
+      const prevCol = new T.Color();
+      this.renderer.getClearColor(prevCol);
+      for (const k of jobs) {
+        const { kind, g, barkM } = k.impBake, lod = this.treeLod(kind, g);
+        const h = 26, w = h / g.aspect;
+        const rt = new T.WebGLRenderTarget(256, 512, { type: T.HalfFloatType, samples: 4 });
+        rt.texture.generateMipmaps = true;
+        rt.texture.minFilter = T.LinearMipmapLinearFilter;
+        const parts = [[g.trunk, barkM, [0.95, 0.92, 0.9]], [g.far, g.farCards ? this.leafMat : this.bodyMat, [mean.r, mean.g, mean.b]]];
+        const meshes = parts.map(([geo, mt, c]) => {
+          const im = new T.InstancedMesh(geo, mt, 1);
+          im.setMatrixAt(0, new T.Matrix4().makeScale(w, w, h));
+          im.setColorAt(0, new T.Color(c[0], c[1], c[2]));
+          im.frustumCulled = false;
+          scene.add(im);
+          return im;
+        });
+        const cam = new T.OrthographicCamera(-lod.R * w, lod.R * w, lod.top * h, 0, 1, 400);
+        cam.up.set(0, 0, 1);
+        cam.position.set(0, 200, 0);
+        cam.lookAt(0, 0, 0);
+        this.renderer.setRenderTarget(rt);
+        this.renderer.setClearColor(0x000000, 0);
+        this.renderer.clear();
+        this.renderer.render(scene, cam);
+        for (const im of meshes) { scene.remove(im); im.dispose(); }
+        // A fresh material per hole, so the next hole's bake can't reuse it.
+        const mat = lod.mat.clone();
+        mat.map = rt.texture;
+        mat.visible = true;
+        k.imp.material = mat;
+        this.holeTextures.push(rt);
+        k.imp.userData.ownMat = true;
+      }
+      this.renderer.setRenderTarget(prevRT);
+      this.renderer.setClearColor(prevCol, prevClear);
+      this.treeEye = null;
+      this.shadowKey = '';
+    });
+  }
+
+  // Patrons behind the ropes, the clubhouse, scoreboards, TV towers and the
+  // stone bridges (Augusta's course data lists them; other courses don't).
+  buildProps(hole, L, group) {
+    const T = this.T, P = this.props, mat = this.propMat;
+    const r = seeded(hole.index * 17 + 3);
+    const m = new T.Matrix4(), q = new T.Quaternion(), s = new T.Vector3(), p = new T.Vector3(), zAxis = new T.Vector3(0, 0, 1);
+    const place = (geo, x, y, ang, sc = 1, shared = true, z = null) => {
+      const o = new T.Mesh(geo, mat);
+      o.position.set(x, y, z ?? this.heightAt(x, y) - 0.05);
+      o.rotation.z = ang - Math.PI / 2; // props face +y
+      o.scale.setScalar(sc);
+      o.castShadow = o.receiveShadow = true;
+      o.userData.shared = shared;
+      group.add(o);
+      return o;
+    };
+    // The crowd: rows of patrons behind each rope line, facing the play.
+    const spacing = [1.5, 1.15, 0.95][this.quality] || 1.15;
+    const variants = ['stand', 'stand2', 'stand3', 'sit'];
+    for (const g of hole.gallery || []) {
+      const pts = g.line;
+      if (!pts || pts.length < 2) continue;
+      const rope = new T.Mesh(P.makeRopeLine(pts, { heightAt: (x, y) => this.heightAt(x, y) }), mat);
+      rope.castShadow = rope.receiveShadow = true;
+      group.add(rope);
+      const lists = [[], [], [], []];
+      const rows = Math.max(1, Math.min(5, g.rows || 2));
+      for (let i = 0; i < pts.length - 1; i++) {
+        const [ax, ay] = pts[i], [bx, by] = pts[i + 1];
+        const len = Math.hypot(bx - ax, by - ay) || 1, dx = (bx - ax) / len, dy = (by - ay) / len;
+        // side +1 is the right-hand normal (-dy, dx), pointing away from the hole.
+        const nx = -dy * (g.side || 1), ny = dx * (g.side || 1);
+        const face = Math.atan2(-ny, -nx);
+        for (let row = 0; row < rows; row++) {
+          // Thinner further back, with gaps here and there.
+          const fill = row === 0 ? 0.92 : 0.82 - row * 0.1;
+          for (let u = r() * spacing; u < len; u += spacing * (0.85 + r() * 0.3)) {
+            if (r() > fill) continue;
+            const off = 1.3 + row * 1.15 + (r() - 0.5) * 0.5, j = (r() - 0.5) * 0.35;
+            const x = ax + dx * (u + j) + nx * off, y = ay + dy * (u + j) + ny * off;
+            const v = row === 0 && r() < 0.22 ? 3 : Math.floor(r() * 3);
+            lists[v].push([x, y, face + (r() - 0.5) * 0.9, 0.92 + r() * 0.16]);
+          }
+        }
+      }
+      lists.forEach((list, v) => {
+        if (!list.length) return;
+        const im = new T.InstancedMesh(P.patron[variants[v]], mat, list.length);
+        im.userData.shared = true;
+        im.castShadow = this.quality > 0;
+        im.receiveShadow = true;
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, zs = 0;
+        list.forEach(([x, y, a, sc], i) => {
+          const z = this.heightAt(x, y);
+          p.set(x, y, z - 0.03);
+          q.setFromAxisAngle(zAxis, a - Math.PI / 2);
+          s.setScalar(sc);
+          im.setMatrixAt(i, m.compose(p, q, s));
+          x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); zs += z;
+        });
+        im.boundingSphere = new T.Sphere(new T.Vector3((x0 + x1) / 2, (y0 + y1) / 2, zs / list.length + 1), Math.hypot(x1 - x0, y1 - y0) / 2 + 3);
+        group.add(im);
+      });
+    }
+    // Set pieces.
+    for (const lm of hole.landmarks || []) {
+      const a = lm.ang ?? -Math.PI / 2;
+      if (lm.kind === 'clubhouse') place(P.clubhouse, lm.x, lm.y, a, 1, true, this.heightAt(lm.x, lm.y) - 0.6);
+      else if (lm.kind === 'leaderboard') place(P.leaderboard, lm.x, lm.y, a);
+      else if (lm.kind === 'scoreboard-small') place(P.leaderboard, lm.x, lm.y, a, 0.55);
+      else if (lm.kind === 'camera-tower') place(P.cameraTower, lm.x, lm.y, a);
+      else if (lm.kind === 'oak' && this.treeKinds.oak_big) {
+        const k = this.treeKinds.oak_big, h = 14, w = h / (k.aspect || 0.55);
+        p.set(lm.x, lm.y, this.heightAt(lm.x, lm.y) - 0.15);
+        q.setFromAxisAngle(zAxis, a);
+        m.compose(p, q, s.set(w, w, h));
+        for (const [geo, mt] of [[k.trunk, this.barkMat], [k.nearBody, this.bodyMat], [k.nearCards, this.leafMat]]) {
+          if (!geo) continue;
+          const im = new T.InstancedMesh(geo, mt, 1);
+          im.setMatrixAt(0, m);
+          im.setColorAt(0, new T.Color(mt === this.barkMat ? L.trunk : L.tree[0]));
+          im.userData.shared = true;
+          im.castShadow = im.receiveShadow = true;
+          im.frustumCulled = false;
+          group.add(im);
+        }
+      }
+    }
+    // Stone footbridges over the creeks.
+    for (const br of hole.bridges || []) {
+      if (br.style !== 'stone') continue;
+      const geo = P.makeStoneBridge({ length: br.len + 2, width: br.name === 'sarazen' ? 3.2 : 2.8, rise: Math.min(1.6, 0.6 + br.len * 0.05), seed: Math.round(br.x * 7 + br.y) });
+      const c = Math.cos(br.ang), sn = Math.sin(br.ang), e = br.len / 2 + 1.5;
+      const z = Math.max(this.heightAt(br.x + c * e, br.y + sn * e), this.heightAt(br.x - c * e, br.y - sn * e));
+      const o = new T.Mesh(geo, mat);
+      o.position.set(br.x, br.y, z - 0.1);
+      o.rotation.z = br.ang;
+      o.castShadow = o.receiveShadow = true;
+      group.add(o);
+    }
+  }
+
   // Grass tufts in the rough near the line of play.
   // The grass field is shared between holes: point it at this hole's maps.
   buildGrass() {
@@ -1362,6 +1774,7 @@ export class View3D {
     U.uMask.value = this.maskTex;
     U.uHeight.value = ht;
     U.uTurf.value = this.turfTex;
+    U.uRoughH.value = this.look.aug ? 0.6 : 1; // Augusta's second cut is short
     U.uBox.value.set(this.box.x, this.box.y, this.box.w, this.box.h);
     U.uGrid.value.set(g.x, g.y, g.step, 0);
     this.grass.visible = true;
@@ -1547,15 +1960,40 @@ export class View3D {
     const nearD = [35, 60, 95][this.quality];
     for (const k of this.treeKindsLive) {
       let a = 0, n = 0, f = 0;
-      const TA = k.trunk.instanceMatrix.array, NA = k.near.instanceMatrix.array, FA = k.far.instanceMatrix.array;
-      const TC = k.trunk.instanceColor.array, NC = k.near.instanceColor.array, FC = k.far.instanceColor.array;
+      const NA = k.near.instanceMatrix.array, FA = k.far.instanceMatrix.array;
+      const NC = k.near.instanceColor.array, FC = k.far.instanceColor.array;
+      const TA = k.trunk && k.trunk.instanceMatrix.array, TC = k.trunk && k.trunk.instanceColor.array;
+      const nd = k.bushes ? nearD * 0.6 : nearD;
+      const midD = [110, 150, 200][this.quality];
+      let tf = 0, im = 0;
+      const imp = k.imp && k.imp.material.visible ? k.imp : null;
+      let idx = 0;
       for (const t of k.items) {
+        idx++;
         const d = Math.hypot(t.x - eye.x, t.y - eye.y);
-        if (d < t.w * 0.5 + 2.5) continue;
-        TA.set(t.m, a * 16);
-        TC.set(t.bark, a * 3);
-        a++;
-        if (d < nearD) {
+        if (d < t.w * 0.5 + 2.5 && !k.bushes) continue;
+        if (k.bushes && d > 140 && idx & 1) continue; // distant azalea banks overlap anyway
+        if (k.trunkFar && d >= nd) {
+          if (imp && d >= midD) {
+            imp.instanceMatrix.array.set(t.m, im * 16);
+            imp.instanceColor.array.set(t.imp, im * 3);
+            im++;
+          } else {
+            k.trunkFar.instanceMatrix.array.set(t.m, tf * 16);
+            k.trunkFar.instanceColor.array.set(t.bark, tf * 3);
+            tf++;
+            FA.set(t.m, f * 16);
+            FC.set(t.leaf, f * 3);
+            f++;
+          }
+          continue;
+        }
+        if (TA) {
+          TA.set(t.m, a * 16);
+          TC.set(t.bark, a * 3);
+          a++;
+        }
+        if (d < nd) {
           NA.set(t.m, n * 16);
           NC.set(t.leaf, n * 3);
           n++;
@@ -1565,7 +2003,9 @@ export class View3D {
           f++;
         }
       }
-      k.trunk.count = a;
+      if (k.trunk) k.trunk.count = a;
+      if (k.trunkFar) k.trunkFar.count = tf;
+      if (k.imp) k.imp.count = im;
       k.near.count = n;
       k.far.count = f;
       if (k.cards) {
@@ -1574,9 +2014,9 @@ export class View3D {
         k.cards.instanceColor.array.set(NC.subarray(0, n * 3));
         k.cards.count = n;
       }
-      for (const im of [k.trunk, k.near, k.far, k.cards].filter(Boolean)) {
-        im.instanceMatrix.needsUpdate = true;
-        im.instanceColor.needsUpdate = true;
+      for (const m of [k.trunk, k.near, k.far, k.cards, k.trunkFar, k.imp].filter(Boolean)) {
+        m.instanceMatrix.needsUpdate = true;
+        m.instanceColor.needsUpdate = true;
       }
     }
   }
@@ -1585,7 +2025,7 @@ export class View3D {
     const g = this.grid;
     if (!g) return 0;
     const fx = (x - g.x) / g.step, fy = (y - g.y) / g.step;
-    if (fx < 0 || fy < 0 || fx >= g.gw - 1 || fy >= g.gh - 1) return EDGE;
+    if (fx < 0 || fy < 0 || fx >= g.gw - 1 || fy >= g.gh - 1) return this.edgeZ ?? EDGE;
     const i = Math.floor(fx), j = Math.floor(fy), u = fx - i, v = fy - j;
     const H = g.H, w = g.gw;
     const a = H[j * w + i], b = H[j * w + i + 1], c = H[(j + 1) * w + i], d = H[(j + 1) * w + i + 1];
@@ -1934,8 +2374,10 @@ export class View3D {
     this.settleUntil = performance.now() + 2500;
     // Soft leaf edges when there is MSAA to resolve them.
     if (this.leafMat.alphaToCoverage !== !this.soft) {
-      this.leafMat.alphaToCoverage = !this.soft; // soft leaf edges with the canvas MSAA
-      this.leafMat.needsUpdate = true;
+      for (const mt of [this.leafMat, this.bloomMat]) {
+        mt.alphaToCoverage = !this.soft; // soft leaf edges with the canvas MSAA
+        mt.needsUpdate = true;
+      }
     }
     // Shadow detail by tier.
     const sm = [1024, 1536, 2048][q];

@@ -9,12 +9,12 @@ Regenerate with `pip install --user pillow numpy scipy && python3 tools/gen_text
 ## Conventions
 
 - Everything tiles in both axes (the clouds tile horizontally only).
-- **Detail maps** (`grass_*`, `sand`, `soil`, `macro`) are near-neutral grey with a mean of
+- **Detail maps** (`grass_*`, `turf_augusta`, `sand`, `sand_white`, `soil`, `macro`) are near-neutral grey with a mean of
   0.5 (128) per channel. They modulate a base colour: `final = base * detail * 2`.
   Load them as linear data (`NoColorSpace`), not sRGB, so 128 means 0.5 in the shader.
 - **Normal maps** (`*_n`) are tangent space, OpenGL convention: red = +X (right),
   green = +Y (up the image), flat = (128, 128, 255). Load as linear data.
-- `bark`, `foliage` and `clouds` are colour textures (sRGB).
+- `bark`, `bark_loblolly`, `pinestraw`, `stone`, `foliage` and `clouds` are colour textures (sRGB).
 
 ## Files
 
@@ -31,3 +31,17 @@ Regenerate with `pip install --user pillow numpy scipy && python3 tools/gen_text
 | `foliage_n.png` | 2048×512 | Normal atlas matching `foliage.png` (flat where transparent). |
 | `clouds.png` | 2048×512 RGBA | Equirectangular sky band: x = azimuth 0–360° (wraps), top row ≈ 40° elevation, bottom row = horizon. Stylised cumulus, white tops and blue-grey undersides, alpha = coverage. |
 | `water_n.webp` | 1024² | Soft rounded ripple normals; scroll two copies at different scales and directions. |
+
+### Augusta set
+
+Rebuild with `python3 tools/gen_textures.py pinestraw sand_white turf_augusta stone bark_loblolly water_creek`
+(about 1.5 minutes, pinestraw is ~45 s of that).
+
+| File | Size (px) | Colour space | World size / use |
+|------|-----------|--------------|------------------|
+| `pinestraw.webp` + `_n` | 1024² | sRGB colour | ~2.5 yards square. Pine-straw beds under the loblolly pines: layered rust / cinnamon / tan needles (fascicles of three), a few loose cone scales and three cones. Use as the final albedo (not a detail map); multiply by a macro/tint if wanted. |
+| `sand_white.webp` + `_n` | 1024² | detail (linear) | ~2 yards square. Brilliant white bunker sand: fine crisp grains, rare glassy glints. Rake grooves (~72 per tile, ≈1" apart) run along V, mostly in the normal map. Mean 0.5, luma std ≈0.06. |
+| `turf_augusta.webp` + `_n` | 1024² | detail (linear) | ~1 yard square. Ultra-manicured ryegrass fairway, finer/denser than `grass_fairway`, low contrast (std ≈0.07). Blades lean toward −V (top of the image): orient −V toward the tee for the "mowed toward the tee" sheen. |
+| `stone.webp` + `_n` | 1024² | sRGB colour | ~2 yards square. Coursed fieldstone (six rough courses per tile, ~30 cm stones) in warm greys / tans / browns with recessed sandy mortar. Stone bridges, creek walls. V = up the wall. |
+| `bark_loblolly.webp` + `_n` | 512×1024 | sRGB colour | Loblolly pine bark: large vertical plates of grey-brown flaky layers with red-cinnamon exposed patches, deep dark furrows. V runs up the trunk; wrap U once around a ~1 m trunk, V every ~2 m. |
+| `water_creek_n.webp` | 512² | normal (linear) | Fine choppy ripples for a shallow fast creek (Rae's Creek); crests run across V, so align V with the flow and scroll along it. ~1.5–3 yards per tile. |
