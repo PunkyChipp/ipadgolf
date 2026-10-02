@@ -1,8 +1,8 @@
 // Drawing. The course is painted once per hole into offscreen canvases (one
 // for the whole hole, one sharper one around the green); each frame draws
 // those through a rotating, zooming camera and adds balls, flag and effects.
-import { T, inEllipse, rng, hashSeed } from './course.js?v=15';
-import { CUP_R } from './sim.js?v=15';
+import { T, inEllipse, rng, hashSeed } from './course.js?v=16';
+import { CUP_R } from './sim.js?v=16';
 
 const PX = 3; // pixels per yard for the whole-hole layer
 const PXG = 16; // pixels per yard for the green layer
@@ -752,7 +752,8 @@ export class Renderer {
     const ctx = this.ctx;
     const [gx, gy] = this.toScreen(b.x, b.y);
     const [bx, by] = this.toScreen(b.x, b.y, b.z || 0, scale);
-    const r = Math.min(7.5, Math.max(3.4, scale * 0.3)) * (1 + (b.z || 0) / 45);
+    // Above ground it grows a little with height; dropping into the cup it shrinks away.
+    const r = Math.min(7.5, Math.max(3.4, scale * 0.3)) * ((b.z || 0) < 0 ? Math.max(0.15, 1 + b.z * 6) : 1 + (b.z || 0) / 45);
     ctx.fillStyle = 'rgba(0,0,0,0.3)';
     ctx.beginPath();
     ctx.ellipse(gx + 1.2, gy + 1.4, r * 0.95, r * 0.75, 0, 0, TAU);

@@ -282,6 +282,15 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--gold); outl
 .btn-pair { display: flex; gap: 6px; }
 .btn-pair .mini-btn { flex: 1; margin-top: 0; padding-left: 4px; padding-right: 4px; }
 
+/* Lens vignette over the 3D view */
+#vignette3d {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 45%, rgba(0, 0, 0, 0) 45%, rgba(0, 0, 0, 0.36) 100%);
+}
+#vignette3d[hidden] { display: none; }
+
 /* Fly the line / read the green (3D only) */
 .fly-btn {
   position: fixed;

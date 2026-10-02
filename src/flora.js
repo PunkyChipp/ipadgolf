@@ -155,7 +155,15 @@ class Builder {
     // With `hang`, t2 points down from the fixed top edge (v = 1).
     const uv = (a, b) => slotUV(slot, a, hang ? 1 - b : b);
     const q = [[0, 0], [1, 0], [1, 1], [0, 0], [1, 1], [0, 1]];
-    for (const [a, b] of q) this.vert(corner(a, b), n, col, uv(a, b));
+    for (const [a, b] of q) this.cardVert(corner(a, b), n, col, uv(a, b));
+  }
+  // Cut-out leaf geometry is kept apart from the solid bodies: the GPU can
+  // skip hidden pixels of opaque surfaces, but not of alpha-tested ones.
+  cardVert(p, n, c, uv) {
+    (this.cards = this.cards || new Builder()).vert(p, n, c, uv);
+  }
+  cardGeometry(T) {
+    return this.cards ? this.cards.geometry(T) : null;
   }
   geometry(T) {
     const g = new T.BufferGeometry();
@@ -291,7 +299,7 @@ function pine(T, { tiers = 5, segs = 16, cards = 0, seed = 3 }) {
       b.quad(p, t1, t2, 0.13 * (1 - t * 0.4) * (0.8 + r() * 0.4), nOf(a, 0.6), [lit * 0.9, lit * 0.95, lit * 0.85], 1, true);
     }
   }
-  return b.geometry(T);
+  return b;
 }
 
 // Palm fronds (the trunk is separate).
@@ -314,18 +322,18 @@ function palmTop(T, { fronds = 11, seed = 5 }) {
       const fold = 0.035;
       const P = (p, s, f) => [p[0] + side[0] * s, p[1] + side[1] * s, p[2] + fold * (1 - f)];
       const c0 = 0.62 + f0 * 0.45, c1 = 0.62 + f1 * 0.45;
-      const v = (p, s, f, c) => b.vert(P(p, s, f), norm([-dir[0] * 0.25, -dir[1] * 0.25, 1]), [c, c * 1.02, c * 0.9], slotUV(2, (s + 1) / 2, f));
+      const v = (p, s, f, c) => b.cardVert(P(p, s, f), norm([-dir[0] * 0.25, -dir[1] * 0.25, 1]), [c, c * 1.02, c * 0.9], slotUV(2, (s + 1) / 2, f));
       v(pts[k], -1, f0, c0); v(pts[k], 1, f0, c0); v(pts[k + 1], 1, f1, c1);
       v(pts[k], -1, f0, c0); v(pts[k + 1], 1, f1, c1); v(pts[k + 1], -1, f1, c1);
     }
   }
   // Coconuts.
   canopy(T, { clusters: [[0.03, 0.15, 0.02, 0.86], [0.03, 0.11, -0.03, 0.87], [0.028, 0.13, 0.04, 0.84]], detail: 1, lump: 0.05, tint: 0.45 }, b);
-  return b.geometry(T);
+  return b;
 }
 
 // Trunks with a slight bend and branches reaching into the canopy.
-function trunk(T, { h = 0.55, r0 = 0.07, r1 = 0.04, branches = 3, bend = 0.04, seed = 9, sides = 8 }) {
+function trunk(T, { h = 0.55, r0 = 0.07, r1 = 0.04, branches = 3, bend = 0.04, seed = 9, sides = 7 }) {
   const r = rand(seed);
   const parts = [];
   const shadeBy = (g, z0, z1) => {
@@ -337,7 +345,7 @@ function trunk(T, { h = 0.55, r0 = 0.07, r1 = 0.04, branches = 3, bend = 0.04, s
     }
     g.setAttribute('color', new T.Float32BufferAttribute(col, 3));
   };
-  const main = new T.CylinderGeometry(r1, r0, h, sides, 4).rotateX(Math.PI / 2).translate(0, 0, h / 2);
+  const main = new T.CylinderGeometry(r1, r0, h, sides, 2, true).rotateX(Math.PI / 2).translate(0, 0, h / 2);
   const p = main.attributes.position;
   for (let i = 0; i < p.count; i++) {
     const f = p.getZ(i) / h;
@@ -354,7 +362,7 @@ function trunk(T, { h = 0.55, r0 = 0.07, r1 = 0.04, branches = 3, bend = 0.04, s
     const a = (i / branches) * TAU + r() * 0.8;
     const dir = new T.Vector3(Math.cos(a) * 0.75, Math.sin(a) * 0.75, 0.75).normalize();
     const len = 0.2 + r() * 0.08;
-    const g = new T.CylinderGeometry(r1 * 0.35, r1 * 0.75, len, 6, 1);
+    const g = new T.CylinderGeometry(r1 * 0.35, r1 * 0.75, len, 5, 1, true);
     g.translate(0, len / 2, 0);
     g.applyQuaternion(new T.Quaternion().setFromUnitVectors(up, dir));
     g.translate(bend * 0.6, 0, h * (0.72 + r() * 0.15));
@@ -369,7 +377,7 @@ function trunk(T, { h = 0.55, r0 = 0.07, r1 = 0.04, branches = 3, bend = 0.04, s
 }
 
 function palmTrunk(T) {
-  const g = new T.TubeGeometry(new T.CatmullRomCurve3([new T.Vector3(0, 0, 0), new T.Vector3(0.05, 0, 0.45), new T.Vector3(0.13, 0, 0.9)]), 14, 0.028, 7).toNonIndexed();
+  const g = new T.TubeGeometry(new T.CatmullRomCurve3([new T.Vector3(0, 0, 0), new T.Vector3(0.05, 0, 0.45), new T.Vector3(0.13, 0, 0.9)]), 10, 0.028, 6).toNonIndexed();
   const p = g.attributes.position, col = [];
   for (let i = 0; i < p.count; i++) {
     const z = p.getZ(i);
@@ -392,28 +400,39 @@ export function makeTrees(T) {
     [0.18, 0.12, -0.16, 0.7], [0.18, -0.12, 0.16, 0.72]];
   const cyp = [[0.3, 0, 0, 0.66, 1, 1, 0.42], [0.25, 0.24, 0.08, 0.56, 1, 1, 0.4], [0.24, -0.25, -0.06, 0.58, 1, 1, 0.4],
     [0.2, 0.05, 0.2, 0.74, 1, 1, 0.4], [0.2, -0.08, -0.2, 0.5, 1, 1, 0.38], [0.18, 0.32, -0.12, 0.48, 1, 1, 0.36]];
+  // Each kind: an opaque body and cut-out leaf cards up close, a cheap
+  // body-only model further away, and a trunk.
+  const split = (b) => ({ nearBody: b.geometry(T), nearCards: b.cardGeometry(T) });
   const leafy = (clusters, seed, cardSize, tint = 1) => ({
-    near: canopy(T, { clusters, detail: 2, cards: 75, cardSize: cardSize * 1.5, seed, tint }).geometry(T),
-    far: canopy(T, { clusters, detail: 1, seed, tint }).geometry(T),
+    ...split(canopy(T, { clusters, detail: 2, cards: 75, cardSize: cardSize * 1.5, seed, tint })),
+    // Far away: the five biggest blobs, smooth enough not to look faceted.
+    far: canopy(T, { clusters: [...clusters].sort((a, b) => b[0] - a[0]).slice(0, 5), detail: 1, lump: 0.15, seed, tint }).geometry(T),
   });
   const kinds = {
     oak: { ...leafy(oakA, 11, 0.15), trunk: trunk(T, { seed: 4 }) },
-    oak2: { ...leafy(oakB, 23, 0.16), trunk: trunk(T, { seed: 8, h: 0.5, branches: 4, bend: -0.03 }) },
-    cypress: { ...leafy(cyp, 31, 0.14, 0.92), trunk: trunk(T, { seed: 6, h: 0.55, r0: 0.08, r1: 0.05, branches: 4, bend: 0.08 }) },
-    pine: { near: pine(T, { cards: 70, seed: 3 }), far: pine(T, { segs: 10, seed: 3 }), trunk: trunk(T, { h: 1, r0: 0.045, r1: 0.02, branches: 0, bend: 0.01, sides: 6 }) },
-    palm: { near: palmTop(T, {}), far: palmTop(T, { fronds: 8 }), trunk: palmTrunk(T) },
+    oak2: { ...leafy(oakB, 23, 0.16), trunk: trunk(T, { seed: 8, h: 0.5, branches: 3, bend: -0.03 }) },
+    cypress: { ...leafy(cyp, 31, 0.14, 0.92), trunk: trunk(T, { seed: 6, h: 0.55, r0: 0.08, r1: 0.05, branches: 3, bend: 0.08 }) },
+    pine: { ...split(pine(T, { cards: 70, seed: 3 })), far: pine(T, { segs: 8, seed: 3 }).geometry(T), trunk: trunk(T, { h: 1, r0: 0.045, r1: 0.02, branches: 0, bend: 0.01, sides: 6 }) },
   };
+  {
+    const near = palmTop(T, {}), far = palmTop(T, { fronds: 8 });
+    // Palms are mostly fronds, so the far model keeps its (fewer) fronds.
+    const farG = T.mergeGeometries([far.geometry(T), far.cardGeometry(T)]);
+    kinds.palm = { ...split(near), far: farG, farCards: true, trunk: palmTrunk(T) };
+  }
   // Bushes: azaleas and gorse.
   const bushClusters = [[0.5, 0, 0, 0.42], [0.4, 0.36, 0.1, 0.34], [0.38, -0.32, -0.1, 0.34], [0.32, 0.05, 0.3, 0.3]];
-  kinds.bush = canopy(T, { clusters: bushClusters, detail: 1, cards: 14, cardSize: 0.42, seed: 41, lump: 0.25 }).geometry(T);
+  const bush = canopy(T, { clusters: bushClusters, detail: 1, cards: 14, cardSize: 0.42, seed: 41, lump: 0.25 });
+  kinds.bush = { body: bush.geometry(T), cards: bush.cardGeometry(T) };
   return kinds;
 }
 
-// Leaves and trunks: one material for every canopy (leaf cards cut out of
-// the atlas, bodies solid), with wind sway and a soft rim of light.
+// Leaves and trunks: the same lighting for canopy bodies (opaque) and leaf
+// cards (cut out of the atlas), with wind sway and a soft rim of light.
 export function makeTreeMaterials(T, atlas, timeU) {
-  const leaf = new T.MeshStandardMaterial({ map: atlas, vertexColors: true, alphaTest: 0.5, side: T.DoubleSide, roughness: 0.9, metalness: 0 });
-  leaf.onBeforeCompile = (sh) => {
+  const leaf = new T.MeshLambertMaterial({ map: atlas, vertexColors: true, alphaTest: 0.5, side: T.DoubleSide });
+  const body = new T.MeshLambertMaterial({ map: atlas, vertexColors: true, side: T.DoubleSide });
+  leaf.onBeforeCompile = body.onBeforeCompile = (sh) => {
     sh.uniforms.uTime = timeU;
     sh.vertexShader = 'uniform float uTime; varying vec3 vLocal; varying vec3 vLocalN;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
       vLocal = position;
@@ -459,32 +478,44 @@ export function makeTreeMaterials(T, atlas, timeU) {
         #endif`);
   };
   leaf.customProgramCacheKey = () => 'pl-leaf';
-  const bark = new T.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
-  return { leaf, bark };
+  body.customProgramCacheKey = () => 'pl-leaf-body';
+  const bark = new T.MeshLambertMaterial({ vertexColors: true });
+  return { leaf, body, bark };
 }
 
 // ---------- grass ----------
 
 // A clump of blades, 1 unit tall: dark at the root, light at the tips.
-export function makeGrassGeo(T, blades = 5) {
-  const b = new Builder(), r = rand(17);
+// Each blade is a single tapering triangle.
+export function makeGrassGeo(T, blades = 6) {
+  const r = rand(17);
+  const P = [], C = [], N = [], I = [];
+  const c0 = [0.45, 0.48, 0.42], c2 = [1.2, 1.22, 1.04];
   for (let i = 0; i < blades; i++) {
     const a = (i / blades) * TAU + r() * 0.8, off = 0.04 + r() * 0.1;
     const ox = Math.cos(a) * off, oy = Math.sin(a) * off;
     const la = a + (r() - 0.5) * 1.2, lean = 0.12 + r() * 0.22;
     const lx = Math.cos(la) * lean, ly = Math.sin(la) * lean;
-    const w = 0.045 + r() * 0.02, pa = la + Math.PI / 2, px = Math.cos(pa) * w / 2, py = Math.sin(pa) * w / 2;
+    const w = 0.045 + r() * 0.02, pa = la + Math.PI / 2, px = (Math.cos(pa) * w) / 2, py = (Math.sin(pa) * w) / 2;
     const h = 0.75 + r() * 0.25;
-    const bl = [ox - px, oy - py, 0], br = [ox + px, oy + py, 0];
-    const ml = [ox + lx * 0.3 - px * 0.7, oy + ly * 0.3 - py * 0.7, h * 0.55], mr = [ox + lx * 0.3 + px * 0.7, oy + ly * 0.3 + py * 0.7, h * 0.55];
-    const tip = [ox + lx, oy + ly, h];
-    const up = [0, 0, 1], uv = slotUV(3, 0.5, 0.5);
-    const c0 = [0.42, 0.45, 0.4], c1 = [0.85, 0.88, 0.8], c2 = [1.18, 1.2, 1.02];
-    b.vert(bl, up, c0, uv); b.vert(br, up, c0, uv); b.vert(mr, up, c1, uv);
-    b.vert(bl, up, c0, uv); b.vert(mr, up, c1, uv); b.vert(ml, up, c1, uv);
-    b.vert(ml, up, c1, uv); b.vert(mr, up, c1, uv); b.vert(tip, up, c2, uv);
+    const base = P.length / 3;
+    const v = (p, c) => {
+      P.push(...p);
+      C.push(...c);
+      N.push(0, 0, 1);
+    };
+    // One tapering triangle per blade: cheap enough to draw thousands.
+    v([ox - px * 1.2, oy - py * 1.2, 0], c0);
+    v([ox + px * 1.2, oy + py * 1.2, 0], c0);
+    v([ox + lx, oy + ly, h], c2);
+    I.push(base, base + 1, base + 2);
   }
-  return b.geometry(T);
+  const g = new T.BufferGeometry();
+  g.setAttribute('position', new T.Float32BufferAttribute(P, 3));
+  g.setAttribute('normal', new T.Float32BufferAttribute(N, 3));
+  g.setAttribute('color', new T.Float32BufferAttribute(C, 3));
+  g.setIndex(I);
+  return g;
 }
 
 // Grass placed entirely on the GPU: a grid of clumps around a centre that
@@ -504,14 +535,10 @@ export function makeGrassMaterial(T, U) {
       float gh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
       float gn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
         return mix(mix(gh(i), gh(i + vec2(1, 0)), f.x), mix(gh(i + vec2(0, 1)), gh(i + vec2(1, 1)), f.x), f.y); }
+      // Height map is half-float with hardware bilinear filtering: one fetch.
       float hAt(vec2 p) {
-        vec2 f = (p - uGrid.xy) / uGrid.z;
-        vec2 i = clamp(floor(f), vec2(0.0), uGrid.zw * 0.0 + vec2(textureSize(uHeight, 0)) - 2.0);
-        vec2 t = clamp(f - i, 0.0, 1.0);
-        ivec2 c = ivec2(i);
-        float a = texelFetch(uHeight, c, 0).r, b = texelFetch(uHeight, c + ivec2(1, 0), 0).r;
-        float d = texelFetch(uHeight, c + ivec2(0, 1), 0).r, e = texelFetch(uHeight, c + ivec2(1, 1), 0).r;
-        return mix(mix(a, b, t.x), mix(d, e, t.x), t.y);
+        vec2 tc = ((p - uGrid.xy) / uGrid.z + 0.5) / vec2(textureSize(uHeight, 0));
+        return textureLod(uHeight, tc, 0.0).r;
       }
       ` + sh.vertexShader.replace('#include <begin_vertex>', `
         vec2 cell = floor(uCentre / uSpacing) + aOff;

@@ -1,11 +1,11 @@
-import { buildHole as buildHoleRaw, windFor, HOLES, COURSES, courseOf, T, TERRAIN_NAMES } from './course.js?v=15';
+import { buildHole as buildHoleRaw, windFor, HOLES, COURSES, courseOf, T, TERRAIN_NAMES } from './course.js?v=16';
 import {
   simulateShot, CLUBS, PUTTER, PUTT_SCALES, SHAPES, FULL_SHAPES, SHORT_SHAPES, GEAR, GEAR_STATS, DEFAULT_GEAR, gearFor, MISHIT, meterWindow, lieEffect, suggestClub, suggestPuttScale, shotSeed, shotLabel, strikeOf, previewShot, flightParams, flightPoint,
-} from './sim.js?v=15';
-import { Renderer } from './render.js?v=15';
-import { Sound } from './audio.js?v=15';
-import { Link, makeCode, cleanCode } from './net.js?v=15';
-import { View3D, parseColor } from './view3d.js?v=15';
+} from './sim.js?v=16';
+import { Renderer } from './render.js?v=16';
+import { Sound } from './audio.js?v=16';
+import { Link, makeCode, cleanCode } from './net.js?v=16';
+import { View3D, parseColor } from './view3d.js?v=16';
 
 const $ = (s) => document.querySelector(s);
 
@@ -456,14 +456,24 @@ function save() {
 
 // ---------- layout / camera ----------
 
+// Layout reads force the browser to lay the page out mid-frame, so the
+// result is reused for a moment (and refreshed on resize).
+let layoutCache = null;
 function viewport() {
+  const now = performance.now();
+  const hudH = $('#hud').hidden, panH = $('#panel').hidden;
+  if (layoutCache && now - layoutCache.t < 400 && layoutCache.hudH === hudH && layoutCache.panH === panH) return layoutCache.v;
   const w = window.innerWidth, h = window.innerHeight;
-  const top = $('#hud').hidden ? 0 : $('#hud').getBoundingClientRect().bottom;
-  const bot = $('#panel').hidden ? h : $('#panel').getBoundingClientRect().top;
-  return { w, h, top, bot, sx: w / 2, sy: top + (bot - top) / 2, vw: w, vh: Math.max(120, bot - top) };
+  const top = hudH ? 0 : $('#hud').getBoundingClientRect().bottom;
+  const bot = panH ? h : $('#panel').getBoundingClientRect().top;
+  const v = { w, h, top, bot, sx: w / 2, sy: top + (bot - top) / 2, vw: w, vh: Math.max(120, bot - top) };
+  layoutCache = { t: now, hudH, panH, v };
+  return v;
 }
 
 function resize() {
+  layoutCache = null;
+  meterKey = '';
   R.resize(window.innerWidth, window.innerHeight, Math.min(window.devicePixelRatio || 1, 2));
   V3.resize(window.innerWidth, window.innerHeight, Math.min(window.devicePixelRatio || 1, 2));
   const r = meterCv.getBoundingClientRect();
@@ -998,7 +1008,13 @@ function tickMeter() {
   }
 }
 
+let meterKey = '';
 function drawMeter() {
+  // Only redraw when something it shows has changed (always while swinging).
+  const swinging = U.swing.phase !== 'idle';
+  const key = [U.phase, U.screen, U.swing.phase, swinging ? performance.now() : 0, U.club, U.shape, U.spin.x, U.spin.y, U.target, U.puttScale, currentBall().lie, currentBall().x, currentBall().y, store.get('difficulty', 'standard')].join('|');
+  if (key === meterKey) return;
+  meterKey = key;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const rect = meterCv.getBoundingClientRect();
   if (Math.round(rect.width * dpr) !== meterCv.width || Math.round(rect.height * dpr) !== meterCv.height) {
@@ -1380,11 +1396,13 @@ function corridorTrees(ball, dir, reach) {
   return out;
 }
 
+let sideDrawn = '';
 function drawSide() {
   const wrap = $('#sideWrap');
   const show = U.screen === 'play' && (U.phase === 'aim') && !CLUBS[U.club].putter && !U.mapView;
   if (!show) {
     wrap.hidden = true;
+    sideDrawn = '';
     return null;
   }
   const ball = currentBall();
@@ -1399,6 +1417,10 @@ function drawSide() {
     sideCache = { key, data: { full, main, ghosts, reach, trees: corridorTrees(ball, U.aim, reach) } };
   }
   const d = sideCache.data;
+  // Nothing changed since the last draw: leave the panel alone.
+  const drawn = `${sideCache.key}|${U.sidePinned}|${window.innerWidth}x${window.innerHeight}`;
+  if (drawn === sideDrawn) return d.main;
+  sideDrawn = drawn;
   wrap.hidden = !(U.sidePinned || d.trees.length);
   $('#sideBtn').classList.toggle('on', U.sidePinned);
   if (wrap.hidden) return d.main;
@@ -1583,6 +1605,7 @@ function show3D(on) {
   if (shown3D === on) return;
   shown3D = on;
   $('#game3d').style.visibility = on ? 'visible' : 'hidden';
+  $('#vignette3d').hidden = !on; // a static CSS layer: free, unlike a per-frame canvas fill
   if (!on) {
     $('#flyBtn').hidden = true;
     if (U.fly) endFly();
@@ -1887,14 +1910,6 @@ function render3D(dt) {
   R.clearOverlay();
   const ctx = R.ctx;
   ctx.setTransform(R.dpr, 0, 0, R.dpr, 0, 0);
-  {
-    const w = window.innerWidth, h = window.innerHeight;
-    const g = ctx.createRadialGradient(w / 2, h * 0.45, Math.min(w, h) * 0.35, w / 2, h * 0.45, Math.hypot(w, h) * 0.62);
-    g.addColorStop(0, 'rgba(0,0,0,0)');
-    g.addColorStop(1, 'rgba(0,0,0,0.38)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, w, h);
-  }
   for (const l of labels) {
     const p = V3.project(l.x, l.y, l.z != null ? l.z : groundZ(l.x, l.y) + (l.tag ? 0 : 0.3));
     if (!p) continue;

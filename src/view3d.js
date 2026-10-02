@@ -1,10 +1,13 @@
 // The 3D view, built on three.js (bundled in src/vendor so it works offline).
 //
 // Art direction: a bright, clean, stylised look in the spirit of modern
-// sports games. Soft sun with real-time shadows and sky light, rolling
-// terrain with crisp mown stripes and checkered greens, chunky 3D trees,
-// grass tufts swaying in the rough, puffy clouds, glassy stylised water,
-// a gentle bloom and vignette.
+// sports games: crisp course edges, textured turf, sun shadows and sky
+// light, textured trees, long grass in the rough, reflective water.
+//
+// Built for a steady 60 fps on tablets: one pass straight to the screen
+// with hardware MSAA (the colour grade lives in the tone mapping), Lambert
+// lighting with a sky probe, shadows re-drawn only when the view moves on,
+// and quality that adapts to the device.
 //
 // The simulation still plays on flat ground; the terrain heights here are
 // visual, and anything drawn on the course is lifted to the ground under it.
@@ -13,7 +16,7 @@
 const TAU = Math.PI * 2;
 const EDGE = 6; // terrain height at the edge of the course area
 const STEP = 1; // terrain grid spacing, yards
-import { paintAtlas, makeTrees, makeTreeMaterials, makeGrassGeo, makeGrassMaterial } from './flora.js?v=15';
+import { paintAtlas, makeTrees, makeTreeMaterials, makeGrassGeo, makeGrassMaterial } from './flora.js?v=16';
 const VERSIONED = new URL(import.meta.url).search; // same ?v= as this file
 
 // Colours and light for each course (sRGB hex).
@@ -394,11 +397,30 @@ export class View3D {
   async init() {
     const T = await import('./vendor/three.bundle.min.js' + VERSIONED);
     this.T = T;
-    const renderer = new T.WebGLRenderer({ canvas: this.cv, antialias: false, powerPreference: 'high-performance', alpha: false });
+    // Colour grade inside tone mapping: ACES, then a little extra saturation
+    // and contrast. It runs in every material's own shader, so it costs
+    // nothing extra (no post-processing passes at all).
+    T.ShaderChunk.tonemapping_pars_fragment = T.ShaderChunk.tonemapping_pars_fragment.replace(
+      'vec3 CustomToneMapping( vec3 color ) { return color; }',
+      `vec3 CustomToneMapping( vec3 color ) {
+        color = max(color, 0.0);
+        color = color * (1.0 + 0.12 * (color - 0.18) / (color + 0.18));
+        color = ACESFilmicToneMapping(color);
+        float l = dot(color, vec3(0.299, 0.587, 0.114));
+        return clamp(mix(vec3(l), color, 1.07), 0.0, 1.0);
+      }`,
+    );
+    // Drawn straight to the screen with the GPU's own multisampling: the
+    // cheapest path on tablets (no off-screen buffers to fill and resolve).
+    const probe = document.createElement('canvas').getContext('webgl2');
+    const dbg0 = probe && probe.getExtension('WEBGL_debug_renderer_info');
+    const soft = /swiftshader|llvmpipe|software/i.test(dbg0 ? String(probe.getParameter(dbg0.UNMASKED_RENDERER_WEBGL)) : '');
+    const renderer = new T.WebGLRenderer({ canvas: this.cv, antialias: !soft, powerPreference: 'high-performance', alpha: false, stencil: false });
     if (!renderer.capabilities.isWebGL2) throw new Error('WebGL2 needed');
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = T.PCFSoftShadowMap;
-    renderer.toneMapping = T.ACESFilmicToneMapping;
+    renderer.shadowMap.type = T.PCFShadowMap;
+    renderer.shadowMap.autoUpdate = false; // re-rendered only when the view moves on
+    renderer.toneMapping = T.CustomToneMapping;
     renderer.outputColorSpace = T.SRGBColorSpace;
     this.renderer = renderer;
     this.scene = new T.Scene();
@@ -422,65 +444,22 @@ export class View3D {
     this.scene.add(sun, sun.target);
     this.sunLight = sun;
 
-    // Post: MSAA render, gentle bloom, vignette, tone mapping.
-    const rt = new T.WebGLRenderTarget(4, 4, { type: T.HalfFloatType, samples: 4 });
-    this.composer = new T.EffectComposer(renderer, rt);
-    this.composer.addPass(new T.RenderPass(this.scene, this.camera));
-    this.bloom = new T.UnrealBloomPass(new T.Vector2(256, 256), 0.32, 0.55, 0.92);
-    this.composer.addPass(this.bloom);
-    this.vignette = new T.ShaderPass({
-      uniforms: { tDiffuse: { value: null }, uAmount: { value: 0.32 } },
-      vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-      fragmentShader: `uniform sampler2D tDiffuse; uniform float uAmount; varying vec2 vUv;
-        void main() {
-          vec4 c = texture2D(tDiffuse, vUv);
-          vec2 d = vUv - 0.5;
-          float v = 1.0 - dot(d, d) * uAmount * 2.2;
-          c.rgb *= v;
-          // A little extra richness in the mid-tones.
-          float l = dot(c.rgb, vec3(0.299, 0.587, 0.114));
-          c.rgb = mix(vec3(l), c.rgb, 1.14);
-          // A gentle contrast curve around mid-grey (in linear light).
-          c.rgb = max(c.rgb, 0.0);
-          c.rgb = c.rgb * (1.0 + 0.12 * (c.rgb - 0.18) / (c.rgb + 0.18));
-          gl_FragColor = c;
-        }`,
-    });
-    this.composer.addPass(this.vignette);
-    this.composer.addPass(new T.OutputPass());
-    // Contrast-adaptive sharpening (after tone mapping) for a crisp image.
-    this.sharpen = new T.ShaderPass({
-      uniforms: { tDiffuse: { value: null }, uTexel: { value: new T.Vector2(1, 1) }, uAmount: { value: 0.55 } },
-      vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-      fragmentShader: `uniform sampler2D tDiffuse; uniform vec2 uTexel; uniform float uAmount; varying vec2 vUv;
-        void main() {
-          vec3 c = texture2D(tDiffuse, vUv).rgb;
-          vec3 n = texture2D(tDiffuse, vUv + vec2(0.0, uTexel.y)).rgb;
-          vec3 s = texture2D(tDiffuse, vUv - vec2(0.0, uTexel.y)).rgb;
-          vec3 e = texture2D(tDiffuse, vUv + vec2(uTexel.x, 0.0)).rgb;
-          vec3 w = texture2D(tDiffuse, vUv - vec2(uTexel.x, 0.0)).rgb;
-          vec3 mn = min(c, min(min(n, s), min(e, w))), mx = max(c, max(max(n, s), max(e, w)));
-          vec3 amp = sqrt(clamp(min(mn, 1.0 - mx) / max(mx, 1e-4), 0.0, 1.0));
-          vec3 wgt = -amp * uAmount * 0.2;
-          gl_FragColor = vec4(clamp((c + (n + s + e + w) * wgt) / (1.0 + 4.0 * wgt), 0.0, 1.0), 1.0);
-        }`,
-    });
-    this.composer.addPass(this.sharpen);
-    // Image-based light from real sky HDRIs (assets/env, CC0 Poly Haven).
-    this.pmrem = new T.PMREMGenerator(renderer);
+    // Sky light from real HDRIs (assets/env, CC0 Poly Haven), baked into a
+    // spherical-harmonics probe: rich ambient colour for almost no cost.
     this.envCache = {};
-    this.scene.environmentRotation.set(Math.PI / 2, 0, 0); // the HDRIs are y-up, the course is z-up
+    this.probe = new T.LightProbe();
+    this.scene.add(this.probe);
 
-    // Quality: 2 = everything, 1 = no bloom/MSAA, 0 = plain render at lower
-    // resolution without grass tufts. Software GL starts low; real GPUs start
-    // high and step down if frames stay slow.
+    // Quality tiers: 2 = High (reflections, sharper, longer grass and tree
+    // detail), 1 = Medium, 0 = Low. Auto starts on Medium (Low for software
+    // GL), climbs when there's headroom and drops if frames run slow.
     let forced = null;
     try { forced = localStorage.getItem('pocketlinks.gfx'); } catch {}
     const dbg = renderer.getContext().getExtension('WEBGL_debug_renderer_info');
     const gpu = dbg ? String(renderer.getContext().getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : '';
     this.soft = /swiftshader|llvmpipe|software/i.test(gpu);
     this.mode = forced === '0' || forced === '1' || forced === '2' ? +forced : 'auto';
-    this.quality = this.mode === 'auto' ? (this.soft ? 0 : 2) : this.mode;
+    this.quality = this.mode === 'auto' ? (this.soft ? 0 : 1) : this.mode;
     this.autoQuality = this.mode === 'auto';
     this.resScale = 1; // dynamic resolution, 0.6 to 1
     this.frameMs = 16;
@@ -499,15 +478,11 @@ export class View3D {
     this.h = h;
     this.dpr = dpr;
     if (!this.renderer) return;
-    const pr = Math.max(0.75, Math.min(dpr, [1.25, 1.5, 2][this.quality]) * this.resScale);
+    const pr = Math.max(0.7, Math.min(dpr, [1, 1.3, 1.6][this.quality]) * this.resScale);
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w, h, false);
     this.cv.style.width = w + 'px';
     this.cv.style.height = h + 'px';
-    this.composer.setPixelRatio(pr);
-    this.composer.setSize(w, h);
-    this.bloom.setSize(Math.round((w * pr) / 2), Math.round((h * pr) / 2));
-    this.sharpen.uniforms.uTexel.value.set(1 / (w * pr), 1 / (h * pr));
   }
 
   // Tiling detail textures for the ground (assets/tex, made by
@@ -593,14 +568,15 @@ export class View3D {
     this.treeKinds = makeTrees(T);
     const mats = makeTreeMaterials(T, this.atlasTex, this.timeU);
     this.leafMat = mats.leaf;
+    this.bodyMat = mats.body;
     this.barkMat = mats.bark;
     // Swap in the painted foliage atlas and bark when they arrive.
     const tl = new T.TextureLoader();
     tl.load(new URL('../assets/tex/foliage.png', import.meta.url).href + VERSIONED, (t) => {
       t.colorSpace = T.SRGBColorSpace;
       t.anisotropy = 4;
-      this.leafMat.map = t;
-      this.leafMat.needsUpdate = true;
+      this.leafMat.map = this.bodyMat.map = t;
+      this.leafMat.needsUpdate = this.bodyMat.needsUpdate = true;
     });
     tl.load(new URL('../assets/tex/bark.webp', import.meta.url).href + VERSIONED, (t) => {
       t.colorSpace = T.SRGBColorSpace;
@@ -620,7 +596,8 @@ export class View3D {
       const N = 160;
       const geo = makeGrassGeo(T);
       const ig = new T.InstancedBufferGeometry();
-      for (const k of ['position', 'normal', 'color', 'uv']) ig.setAttribute(k, geo.attributes[k]);
+      for (const k of ['position', 'normal', 'color']) ig.setAttribute(k, geo.attributes[k]);
+      ig.setIndex(geo.index);
       // Nearest cells first, so drawing fewer instances shrinks the field
       // around its centre rather than cutting off a strip.
       const cells = [];
@@ -693,11 +670,13 @@ export class View3D {
         if (o.material && o.userData.ownMat) o.material.dispose();
       });
       for (const t of this.holeTextures || []) t.dispose();
+      if (this.terrainMat) this.terrainMat.dispose();
       if (this.reflector) this.reflector.dispose();
       this.reflector = null;
     }
     this.hole = hole;
     this.box = R.box;
+    this.shadowKey = '';
     this.slopePts = R.slopePts;
     const L = (this.look = LOOKS[hole.course] || LOOKS.links);
     const group = new T.Group();
@@ -862,19 +841,9 @@ export class View3D {
         uv[k * 2 + 1] = 1 - (j * step) / box.h;
       }
     }
-    const idx = new Uint32Array((gw - 1) * (gh - 1) * 6);
-    let o = 0;
-    for (let j = 0; j < gh - 1; j++) {
-      for (let i = 0; i < gw - 1; i++) {
-        const a = j * gw + i, b = a + 1, c = a + gw, d = c + 1;
-        idx[o++] = a; idx[o++] = b; idx[o++] = d;
-        idx[o++] = a; idx[o++] = d; idx[o++] = c;
-      }
-    }
     const geo = new T.BufferGeometry();
     geo.setAttribute('position', new T.BufferAttribute(pos, 3));
     geo.setAttribute('uv', new T.BufferAttribute(uv, 2));
-    geo.setIndex(new T.BufferAttribute(idx, 1));
     // Normals straight from the height grid (central differences).
     const nrm = new Float32Array(N * 3);
     for (let j = 0; j < gh; j++) {
@@ -918,7 +887,7 @@ export class View3D {
     this.sdf = sd;
     const tee = hole.tee, gr = hole.green;
     const col = (c) => new T.Color(c);
-    const mat = new T.MeshStandardMaterial({ map: turf, roughness: 0.92, metalness: 0 });
+    const mat = new T.MeshLambertMaterial({ map: turf });
     mat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, this.detU, {
         uSdf: { value: sdfTex }, uAlong: { value: alongTex },
@@ -945,9 +914,10 @@ export class View3D {
         // Two differently scaled and rotated lookups, switched by a slow
         // noise, so tiling never lines up.
         vec4 det(sampler2D t, vec2 p, float size, float sel) {
-          vec4 a = texture2D(t, p / size);
+          if (sel < 0.02) return texture2D(t, p / size);
           vec4 b = texture2D(t, rot2(1.1) * p / (size * 1.37) + vec2(0.37, 0.71));
-          return mix(a, b, sel);
+          if (sel > 0.98) return b;
+          return mix(texture2D(t, p / size), b, sel);
         }
         ` + sh.fragmentShader
         .replace('#include <map_fragment>', `#include <map_fragment>
@@ -1002,17 +972,20 @@ export class View3D {
           float sel = smoothstep(0.42, 0.58, texture2D(uDMacro, vWP.xy / 23.0 + 0.5).r);
           float wRough = clamp(1.0 - wFair - wGreen - max(wFringe, 0.0) - wSand - wBed, 0.0, 1.0);
           vec4 dA = vec4(0.5), dN = vec4(0.5, 0.5, 1.0, 1.0);
-          if (uDetOn > 0.5) {
-            dA = vec4(0.0); dN = vec4(0.0);
+          // Detail only where it can be seen; normal maps only up close.
+          bool nearN = dCam < 140.0;
+          if (uDetOn > 0.5 && dCam < 220.0) {
+            dA = vec4(0.0);
+            if (nearN) dN = vec4(0.0);
             float wf = wFair + max(wFringe, 0.0);
-            if (wf > 0.002) { dA += wf * det(uDFairA, vWP.xy, 1.1, sel); dN += wf * det(uDFairN, vWP.xy, 1.1, sel); }
-            if (wGreen > 0.002) { dA += wGreen * det(uDGreenA, vWP.xy, 0.9, sel); dN += wGreen * det(uDGreenN, vWP.xy, 0.9, sel); }
-            if (wRough > 0.002) { dA += wRough * det(uDRoughA, vWP.xy, 1.8, sel); dN += wRough * det(uDRoughN, vWP.xy, 1.8, sel); }
-            if (wSand > 0.002) { dA += wSand * det(uDSandA, vWP.xy, 2.0, sel); dN += wSand * det(uDSandN, vWP.xy, 2.0, sel); }
-            if (wBed > 0.002) { dA += wBed * det(uDSoilA, vWP.xy, 3.0, sel); dN += wBed * det(uDSoilN, vWP.xy, 3.0, sel); }
+            if (wf > 0.002) { dA += wf * det(uDFairA, vWP.xy, 1.1, sel); if (nearN) dN += wf * det(uDFairN, vWP.xy, 1.1, sel); }
+            if (wGreen > 0.002) { dA += wGreen * det(uDGreenA, vWP.xy, 0.9, sel); if (nearN) dN += wGreen * det(uDGreenN, vWP.xy, 0.9, sel); }
+            if (wRough > 0.002) { dA += wRough * det(uDRoughA, vWP.xy, 1.8, sel); if (nearN) dN += wRough * det(uDRoughN, vWP.xy, 1.8, sel); }
+            if (wSand > 0.002) { dA += wSand * det(uDSandA, vWP.xy, 2.0, sel); if (nearN) dN += wSand * det(uDSandN, vWP.xy, 2.0, sel); }
+            if (wBed > 0.002) { dA += wBed * det(uDSoilA, vWP.xy, 3.0, sel); if (nearN) dN += wBed * det(uDSoilN, vWP.xy, 3.0, sel); }
           }
           // A coarser pass of the same grass so the mid-distance isn't flat.
-          if (uDetOn > 0.5) {
+          if (uDetOn > 0.5 && dCam > 4.0 && dCam < 160.0) {
             float wg = 1.0 - wSand - wBed;
             vec2 mp = rot2(0.7) * vWP.xy / 6.3;
             vec3 midA = mix(texture2D(uDFairA, mp).rgb, texture2D(uDRoughA, mp).rgb, wRough);
@@ -1025,18 +998,41 @@ export class View3D {
           vec3 wN = normalize(vWN + (vec3(1.0, 0.0, 0.0) * tN.x + vec3(0.0, 1.0, 0.0) * tN.y) * nStr);`)
         .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
           normal = normalize(mat3(viewMatrix) * wN);`)
-        .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-          roughnessFactor = mix(0.95, 0.78, wGreen) * mix(1.0, 1.05, wSand);`);
+;
     };
     mat.customProgramCacheKey = () => 'pl-terrain';
-    const mesh = new T.Mesh(geo, mat);
-    mesh.receiveShadow = true;
-    mesh.userData.ownMat = true;
-    group.add(mesh);
+    // Split into tiles that share the vertex data, so the GPU skips any part
+    // of the course that's off screen.
+    const TILE = 40;
+    for (let tj = 0; tj < gh - 1; tj += TILE) {
+      for (let ti = 0; ti < gw - 1; ti += TILE) {
+        const i1 = Math.min(gw - 1, ti + TILE), j1 = Math.min(gh - 1, tj + TILE);
+        const idx = new Uint32Array((i1 - ti) * (j1 - tj) * 6);
+        let o = 0, zmin = Infinity, zmax = -Infinity;
+        for (let j = tj; j < j1; j++) {
+          for (let i = ti; i < i1; i++) {
+            const a = j * gw + i, b = a + 1, c = a + gw, d = c + 1;
+            idx[o++] = a; idx[o++] = b; idx[o++] = d;
+            idx[o++] = a; idx[o++] = d; idx[o++] = c;
+            zmin = Math.min(zmin, H[a]); zmax = Math.max(zmax, H[a]);
+          }
+        }
+        const tg = new T.BufferGeometry();
+        for (const k of ['position', 'uv', 'normal']) tg.setAttribute(k, geo.attributes[k]);
+        tg.setIndex(new T.BufferAttribute(idx, 1));
+        const x0 = box.x + ti * step, y0 = box.y + tj * step, x1 = box.x + i1 * step, y1 = box.y + j1 * step;
+        tg.boundingSphere = new T.Sphere(new T.Vector3((x0 + x1) / 2, (y0 + y1) / 2, (zmin + zmax) / 2), Math.hypot(x1 - x0, y1 - y0, zmax - zmin) / 2 + 1);
+        tg.boundingBox = new T.Box3(new T.Vector3(x0, y0, zmin - 1), new T.Vector3(x1, y1, zmax + 1));
+        const mesh = new T.Mesh(tg, mat);
+        mesh.receiveShadow = true;
+        group.add(mesh);
+      }
+    }
+    this.terrainMat = mat;
 
     // The land beyond: a frame around the course area.
     const big = 6000, cx = box.x + box.w / 2, cy = box.y + box.h / 2;
-    const outer = new T.MeshStandardMaterial({ color: L.ob, roughness: 1 });
+    const outer = new T.MeshLambertMaterial({ color: L.ob });
     const bx0 = box.x, by0 = box.y, bx1 = box.x + box.w, by1 = box.y + box.h;
     for (const [x0, y0, x1, y1] of [[cx - big, cy - big, cx + big, by0], [cx - big, by1, cx + big, cy + big], [cx - big, by0, bx0, by1], [bx1, by0, cx + big, by1]]) {
       const pl = new T.Mesh(new T.PlaneGeometry(x1 - x0, y1 - y0), outer);
@@ -1075,6 +1071,8 @@ export class View3D {
           }
           if (vD.z < 0.0) c = uHorizon;
           gl_FragColor = vec4(c, 1.0);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
         }`,
       side: T.BackSide, depthWrite: false, fog: false,
     });
@@ -1087,7 +1085,7 @@ export class View3D {
 
     // Rounded hills on the horizon.
     const cx = this.box.x + this.box.w / 2, cy = this.box.y + this.box.h / 2;
-    const hillMat = new T.MeshStandardMaterial({ color: 0xffffff, roughness: 1 });
+    const hillMat = new T.MeshLambertMaterial({ color: 0xffffff });
     const hills = new T.InstancedMesh(new T.SphereGeometry(1, 28, 14), hillMat, 44);
     const m = new T.Matrix4(), q = new T.Quaternion(), sc = new T.Vector3(), p = new T.Vector3();
     const col = new T.Color();
@@ -1215,12 +1213,29 @@ export class View3D {
         }`,
       transparent: true, depthWrite: false,
     });
-    const geo = new T.PlaneGeometry(box.w, box.h);
+    // The surface only covers the water itself, so it (and its mirror pass)
+    // is skipped whenever no water is in view.
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const wt of this.hole.water) {
+      if (wt.line) {
+        for (const [px, py] of wt.line) {
+          x0 = Math.min(x0, px - wt.w); y0 = Math.min(y0, py - wt.w);
+          x1 = Math.max(x1, px + wt.w); y1 = Math.max(y1, py + wt.w);
+        }
+      } else {
+        const rr = Math.max(wt.rx, wt.ry) + 2;
+        x0 = Math.min(x0, wt.x - rr); y0 = Math.min(y0, wt.y - rr);
+        x1 = Math.max(x1, wt.x + rr); y1 = Math.max(y1, wt.y + rr);
+      }
+    }
+    x0 = Math.max(x0, box.x); y0 = Math.max(y0, box.y);
+    x1 = Math.min(x1, box.x + box.w); y1 = Math.min(y1, box.y + box.h);
+    const geo = new T.PlaneGeometry(x1 - x0, y1 - y0);
     // A planar mirror renders the scene (minus the grass) for reflections;
-    // only at the top quality setting.
+    // only on High, at reduced resolution.
     const size = new T.Vector2();
     this.renderer.getDrawingBufferSize(size);
-    const w = new T.Reflector(geo, { textureWidth: Math.round(size.x * 0.5), textureHeight: Math.round(size.y * 0.5), clipBias: 0.02 });
+    const w = new T.Reflector(geo, { textureWidth: Math.round(size.x * 0.4), textureHeight: Math.round(size.y * 0.4), clipBias: 0.02, multisample: 0 });
     const own = w.material;
     mat.uniforms.tRefl.value = own.uniforms.tDiffuse.value;
     mat.uniforms.textureMatrix = own.uniforms.textureMatrix;
@@ -1233,7 +1248,7 @@ export class View3D {
       if (on) reflect.apply(w, args);
     };
     this.reflector = w;
-    w.position.set(box.x + box.w / 2, box.y + box.h / 2, -0.12);
+    w.position.set((x0 + x1) / 2, (y0 + y1) / 2, -0.12);
     w.userData.ownMat = true;
     w.renderOrder = 2;
     group.add(w);
@@ -1267,7 +1282,10 @@ export class View3D {
         group.add(im);
         return im;
       };
-      const live = { trunk: mk(g.trunk, this.barkMat), near: mk(g.near, this.leafMat), far: mk(g.far, this.leafMat), items: [] };
+      const live = {
+        trunk: mk(g.trunk, this.barkMat), near: mk(g.nearBody, this.bodyMat), cards: g.nearCards ? mk(g.nearCards, this.leafMat) : null,
+        far: mk(g.far, g.farCards ? this.leafMat : this.bodyMat), items: [],
+      };
       for (const t of list) {
         const width = kind === 'pine' ? t.r * 2.6 : kind === 'cypress' ? t.r * 2.3 : kind === 'palm' ? t.r * 2.2 : t.r * 2.3;
         const h = t.h * (kind.startsWith('oak') ? 1.05 : 1);
@@ -1308,19 +1326,26 @@ export class View3D {
       }
     }
     if (bushes.length) {
-      const inst = new T.InstancedMesh(this.treeKinds.bush, this.leafMat, bushes.length);
-      inst.userData.shared = true;
-      inst.castShadow = true;
-      inst.receiveShadow = true;
+      const kb = this.treeKinds.bush;
+      const body = new T.InstancedMesh(kb.body, this.bodyMat, bushes.length);
+      const cards = new T.InstancedMesh(kb.cards, this.leafMat, bushes.length);
+      for (const inst of [body, cards]) {
+        inst.userData.shared = true;
+        inst.castShadow = true;
+        inst.receiveShadow = true;
+      }
       bushes.forEach(([x, y, sz, c], i) => {
         p.set(x, y, this.heightAt(x, y) - 0.08);
         q.setFromAxisAngle(zAxis, r() * TAU);
         s.set(sz * (1 + r() * 0.4), sz, sz * 0.9);
         m.compose(p, q, s);
-        inst.setMatrixAt(i, m);
-        inst.setColorAt(i, col.set(c));
+        col.set(c);
+        for (const inst of [body, cards]) {
+          inst.setMatrixAt(i, m);
+          inst.setColorAt(i, col);
+        }
       });
-      group.add(inst);
+      group.add(body, cards);
     }
   }
 
@@ -1328,8 +1353,10 @@ export class View3D {
   // The grass field is shared between holes: point it at this hole's maps.
   buildGrass() {
     const T = this.T, g = this.grid, U = this.grassU;
-    const ht = new T.DataTexture(g.H, g.gw, g.gh, T.RedFormat, T.FloatType);
-    ht.minFilter = ht.magFilter = T.NearestFilter;
+    const hh = new Uint16Array(g.H.length);
+    for (let k = 0; k < hh.length; k++) hh[k] = toHalf(g.H[k]);
+    const ht = new T.DataTexture(hh, g.gw, g.gh, T.RedFormat, T.HalfFloatType);
+    ht.minFilter = ht.magFilter = T.LinearFilter;
     ht.needsUpdate = true;
     this.holeTextures.push(ht);
     U.uMask.value = this.maskTex;
@@ -1406,7 +1433,7 @@ export class View3D {
     this.balls = [];
     for (let i = 0; i < 6; i++) {
       const ball = sh(new T.Mesh(this.ballGeo, this.ballMat));
-      ball.castShadow = true;
+      ball.castShadow = false; // it has its own soft blob shadow
       const blob = sh(new T.Mesh(this.discGeo, this.blobMat));
       const ringMat = new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, depthWrite: false, toneMapped: false, side: T.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
       const ring = sh(new T.Mesh(this.ringGeo, ringMat));
@@ -1462,20 +1489,20 @@ export class View3D {
   }
 
   // Terrain height at a point (bilinear), for placing things on the ground.
-  // Sky light from an HDRI, loaded once per course look.
+  // Sky light from an HDRI, loaded once per course look and baked into
+  // spherical harmonics (the HDRIs are y-up, so they're turned z-up first).
   useEnv(name, L) {
     const T = this.T;
     const apply = (e) => {
       if (this.look !== L) return;
-      this.scene.environment = e.tex;
+      this.probe.sh.copy(e.sh);
       // Each HDRI is scaled to the same average brightness (sun excluded),
       // so the sky light is consistent from course to course.
-      this.scene.environmentIntensity = (L.envI ?? 0.8) * (0.28 / e.mean);
-      this.hemi.intensity = L.hemiI * 0.35;
+      this.probe.intensity = (L.envI ?? 0.8) * (0.28 / e.mean);
+      this.hemi.intensity = L.hemiI * 0.45;
     };
     if (this.envCache[name]) return apply(this.envCache[name]);
     new T.EXRLoader().load(new URL(`../assets/env/${name}.exr`, import.meta.url).href + VERSIONED, (eq) => {
-      eq.mapping = T.EquirectangularReflectionMapping;
       const d = eq.image.data, half = d instanceof Uint16Array;
       let sum = 0, n = 0;
       for (let i = 0; i < d.length; i += 4 * 7) {
@@ -1483,10 +1510,32 @@ export class View3D {
         sum += Math.min(3, (v(i) + v(i + 1) + v(i + 2)) / 3);
         n++;
       }
-      const e = { tex: this.pmrem.fromEquirectangular(eq).texture, mean: Math.max(0.05, sum / n) };
-      eq.dispose();
-      this.envCache[name] = e;
-      apply(e);
+      const tmp = new T.Scene();
+      const ball = new T.Mesh(new T.SphereGeometry(1, 32, 16), new T.MeshBasicMaterial({ map: eq, side: T.BackSide }));
+      ball.rotation.x = Math.PI / 2;
+      tmp.add(ball);
+      const rt = new T.WebGLCubeRenderTarget(32, { type: T.HalfFloatType });
+      const cam = new T.CubeCamera(0.1, 10, rt);
+      cam.update(this.renderer, tmp);
+      const pr = T.LightProbeGenerator.fromCubeRenderTarget(this.renderer, rt);
+      const done = (lp) => {
+        // Keep the sky's light but tame its colour cast, or everything in
+        // shade turns blue.
+        const sh = lp.sh.clone();
+        for (const c of sh.coefficients) {
+          const l = (c.x + c.y + c.z) / 3;
+          c.lerp(new T.Vector3(l, l, l), 0.55);
+        }
+        const e = { sh, mean: Math.max(0.05, sum / n) };
+        rt.dispose();
+        ball.geometry.dispose();
+        ball.material.dispose();
+        eq.dispose();
+        this.envCache[name] = e;
+        apply(e);
+      };
+      if (pr && typeof pr.then === 'function') pr.then(done);
+      else done(pr);
     });
   }
 
@@ -1495,7 +1544,7 @@ export class View3D {
   updateTrees(eye) {
     if (this.treeEye && Math.hypot(eye.x - this.treeEye[0], eye.y - this.treeEye[1]) < 3) return;
     this.treeEye = [eye.x, eye.y];
-    const nearD = this.quality >= 2 ? 120 : this.quality === 1 ? 70 : 0;
+    const nearD = [35, 60, 95][this.quality];
     for (const k of this.treeKindsLive) {
       let a = 0, n = 0, f = 0;
       const TA = k.trunk.instanceMatrix.array, NA = k.near.instanceMatrix.array, FA = k.far.instanceMatrix.array;
@@ -1519,7 +1568,13 @@ export class View3D {
       k.trunk.count = a;
       k.near.count = n;
       k.far.count = f;
-      for (const im of [k.trunk, k.near, k.far]) {
+      if (k.cards) {
+        // Leaf cards go with the detailed bodies.
+        k.cards.instanceMatrix.array.set(NA.subarray(0, n * 16));
+        k.cards.instanceColor.array.set(NC.subarray(0, n * 3));
+        k.cards.count = n;
+      }
+      for (const im of [k.trunk, k.near, k.far, k.cards].filter(Boolean)) {
         im.instanceMatrix.needsUpdate = true;
         im.instanceColor.needsUpdate = true;
       }
@@ -1627,10 +1682,17 @@ export class View3D {
     // The sun's shadow follows the area the camera is looking at.
     const tgt = sc.cam.target;
     const fx = tgt[0] - eye.x, fy = tgt[1] - eye.y, fl = Math.hypot(fx, fy) || 1;
-    const cx = eye.x + (fx / fl) * 55, cy = eye.y + (fy / fl) * 55, cz = H(cx, cy);
-    this.sunLight.target.position.set(cx, cy, cz);
-    this.sunLight.position.set(cx + this.sunDir.x * 250, cy + this.sunDir.y * 250, cz + this.sunDir.z * 250);
-    this.sunLight.target.updateMatrixWorld();
+    // Snapped to a coarse grid, and the shadow map is only re-drawn when the
+    // snapped spot (or the set of trees) changes, not every frame.
+    const cx = Math.round((eye.x + (fx / fl) * 55) / 18) * 18, cy = Math.round((eye.y + (fy / fl) * 55) / 18) * 18, cz = H(cx, cy);
+    const key = `${cx},${cy}`;
+    if (key !== this.shadowKey) {
+      this.shadowKey = key;
+      this.sunLight.target.position.set(cx, cy, cz);
+      this.sunLight.position.set(cx + this.sunDir.x * 250, cy + this.sunDir.y * 250, cz + this.sunDir.z * 250);
+      this.sunLight.target.updateMatrixWorld();
+      this.renderer.shadowMap.needsUpdate = true;
+    }
 
     this.updateTrees(eye);
     // The grass field sits a little ahead of the camera and parts round balls.
@@ -1675,6 +1737,7 @@ export class View3D {
       const bs = Math.max(0.16, r * 2.6) * (1 + (z - g) * 0.04);
       b.blob.scale.setScalar(bs);
       b.blob.position.set(s.x, s.y, g + 0.03);
+      if (z < g - 0.005) b.blob.visible = false; // dropping into the cup
       b.blob.material.opacity = Math.max(0.15, 0.85 - (z - g) * 0.03);
       b.ring.visible = !!s.ring;
       if (s.ring) {
@@ -1796,38 +1859,57 @@ export class View3D {
     }
 
     this.trackSpeed();
-    if (this.quality === 0) this.renderer.render(this.scene, this.camera);
-    else this.composer.render();
+    this.renderer.render(this.scene, this.camera);
   }
 
   // Drop a quality level when frames stay slow for a couple of seconds.
-  // Keep the frame rate up: first trim the resolution a little at a time,
-  // then drop a quality tier; climb back when there's headroom. Frames just
-  // after loading a hole or changing settings are ignored (shader compiles).
+  // Hold 60 fps. When frames run slow, trim the resolution a little at a
+  // time, then drop a quality tier. A display capped at 60 Hz can't show
+  // spare headroom, so climbing is a trial: try the next tier up for a few
+  // seconds and keep it only if frames stay smooth. Frames just after
+  // loading a hole or changing settings are ignored (shader compiles).
   trackSpeed() {
     const now = performance.now();
     const dt = now - this.lastFrame;
     this.lastFrame = now;
     if (!this.autoQuality || dt > 500 || now < this.settleUntil) return;
-    this.frameMs += (dt - this.frameMs) * 0.05;
+    this.frameMs += (dt - this.frameMs) * 0.06;
     this.speedT += dt;
-    if (this.frameMs > 36 && this.speedT > 1500) {
+    const slow = this.frameMs > 18.8;
+    if (this.trial) {
+      if (slow && this.speedT > 800) {
+        // The trial tier is too much for this device: go back and stay.
+        this.noClimbUntil = Infinity;
+        const back = this.trial.from;
+        this.trial = null;
+        this.speedT = 0;
+        return this.setQuality(back);
+      }
+      if (now > this.trial.until) this.trial = null; // passed
+      return;
+    }
+    if (slow && this.speedT > 1500) {
       this.speedT = 0;
       if (this.resScale > 0.75) this.setResScale(this.resScale - 0.1);
       else if (this.quality > 0) {
-        this.noClimbUntil = now + 90000;
+        this.noClimbUntil = now + 120000;
         this.setQuality(this.quality - 1);
       }
-    } else if (this.frameMs < 21 && this.speedT > 5000) {
+    } else if (!slow && this.frameMs < 17.4 && this.speedT > 6000) {
       this.speedT = 0;
       if (this.resScale < 1) this.setResScale(Math.min(1, this.resScale + 0.1));
-      else if (this.quality < 2 && !this.soft && now > this.noClimbUntil) this.setQuality(this.quality + 1);
-    } else if (this.speedT > 6000) this.speedT = 0;
+      else if (this.quality < 2 && !this.soft && now > this.noClimbUntil) {
+        const from = this.quality;
+        this.setQuality(from + 1);
+        this.trial = { from, until: performance.now() + 2500 + 4000 };
+      }
+    } else if (this.speedT > 8000) this.speedT = 0;
   }
 
   setResScale(k) {
     this.resScale = k;
-    this.frameMs = 25;
+    this.frameMs = 16.7;
+    this.speedT = 0;
     this.settleUntil = performance.now() + 800;
     if (this.w) this.resize(this.w, this.h, this.dpr);
   }
@@ -1841,28 +1923,37 @@ export class View3D {
       else localStorage.setItem('pocketlinks.gfx', String(mode));
     } catch {}
     this.resScale = 1;
-    this.setQuality(mode === 'auto' ? (this.soft ? 0 : 2) : mode);
+    this.setQuality(mode === 'auto' ? (this.soft ? 0 : 1) : mode);
   }
 
   setQuality(q) {
     this.quality = q;
     this.treeEye = null;
-    this.frameMs = 25;
+    this.frameMs = 16.7;
+    this.speedT = 0;
     this.settleUntil = performance.now() + 2500;
     // Soft leaf edges when there is MSAA to resolve them.
-    if (this.leafMat.alphaToCoverage !== q >= 2) {
-      this.leafMat.alphaToCoverage = q >= 2;
+    if (this.leafMat.alphaToCoverage !== !this.soft) {
+      this.leafMat.alphaToCoverage = !this.soft; // soft leaf edges with the canvas MSAA
       this.leafMat.needsUpdate = true;
     }
-    this.bloom.enabled = q >= 2;
-    this.composer.renderTarget1.samples = this.composer.renderTarget2.samples = q >= 2 ? 4 : 0;
+    // Shadow detail by tier.
+    const sm = [1024, 1536, 2048][q];
+    if (this.sunLight.shadow.mapSize.x !== sm) {
+      this.sunLight.shadow.mapSize.set(sm, sm);
+      if (this.sunLight.shadow.map) {
+        this.sunLight.shadow.map.dispose();
+        this.sunLight.shadow.map = null;
+      }
+    }
+    this.shadowKey = '';
     if (this.grass) {
       // Grass at every tier: just sparser on the lower ones.
       this.grass.visible = !!this.hole;
-      const far = [28, 36, 44][q];
-      this.grassU.uSpacing.value = 0.55;
+      const far = [22, 30, 40][q], sp = [0.7, 0.62, 0.55][q];
+      this.grassU.uSpacing.value = sp;
       this.grassU.uFar.value = far;
-      const r = far / 0.55 + 4;
+      const r = far / sp + 3;
       this.grass.geometry.instanceCount = Math.min(160 * 160, Math.ceil(Math.PI * r * r));
     }
     if (this.w) this.resize(this.w, this.h, this.dpr);

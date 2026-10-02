@@ -16,7 +16,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;800&display=swap">
-<link rel="stylesheet" href="styles.css?v=15">
+<link rel="stylesheet" href="styles.css?v=16">
 </head>
 <body>
 <canvas id="game3d" aria-hidden="true"></canvas>
@@ -81,6 +81,7 @@
   </div>
 </footer>
 
+<div id="vignette3d" hidden></div>
 <button id="flyBtn" class="fly-btn" hidden aria-label="Fly the camera along the shot">Fly</button>
 
 <div id="sideWrap" class="side-wrap" hidden>
@@ -296,6 +297,8 @@
       <div>
         <h3>Fly and Read</h3>
         <p>In 3D, tap <b>Fly</b> to send the camera along your planned shot with a ghost ball. It tells you if the line is clear or which tree you'd hit. On the green, <b>Read</b> crouches down and walks the line to the hole, then looks back from behind the cup. The flagstick comes out for putts.</p>
+        <h3>Graphics</h3>
+        <p>The game aims for a smooth 60 frames a second. On <b>Auto</b> it starts on Medium, tries High when your iPad has room to spare, and steps down if it starts to struggle. To fix the level yourself, use <b>Graphics</b> in the pause menu: High adds water reflections, sharper detail and more of the long grass and tree detail.</p>
         <h3>3D view and difficulty</h3>
         <p>You play in 3D from behind the ball: each hole opens with a flyover (tap to skip), the camera chases your shot and cuts to the landing area, and the arc shows your flight before you swing. <b>2D</b> switches to the classic top-down view and <b>Map</b> shows the whole hole. Pinch to zoom. <b>Timing</b> on the title screen sets the swing window and how much of each putt's path you see: Casual, Standard or Pro.</p>
       </div>
@@ -304,6 +307,6 @@
   </div>
 </section>
 
-<script type="module" src="src/game.js?v=15"></script>
+<script type="module" src="src/game.js?v=16"></script>
 </body>
 </html>
