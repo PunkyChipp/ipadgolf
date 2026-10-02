@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Asset Preview</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #bfe0f5; overflow: hidden; font: 13px system-ui, sans-serif; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #info { position: fixed; left: 8px; top: 6px; color: #12301c; background: rgba(255,255,255,.7); padding: 3px 7px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div id="info"></div>
+<script type="module">
+// Standalone viewer for the flora.js trees and props.js furniture.
+// Serve the repo root (python3 -m http.server) and open
+//   /tools/asset-preview.html?asset=loblolly&dist=40&az=30&el=12&lod=near
+// asset: any makeTrees kind, patron, chair, ropeLine, stoneBridge, leaderboard,
+// clubhouse, cameraTower, cupFlag, grove (a composed Augusta corner),
+// or "list" to print the names. Extra: n (instances), h/w (tree size, yd),
+// tx/ty/tz (look-at offset), fov, shadow=0.
+import * as T from '../src/vendor/three.bundle.min.js';
+import { makeTrees, makeTreeMaterials } from '../src/flora.js';
+import { makeProps, makePropMaterial } from '../src/props.js';
+
+const Q = new URLSearchParams(location.search);
+const num = (k, d) => (Q.has(k) ? parseFloat(Q.get(k)) : d);
+const asset = Q.get('asset') || 'grove';
+const lod = Q.get('lod') || 'near';
+
+const renderer = new T.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = Q.get('shadow') !== '0';
+renderer.shadowMap.type = T.PCFShadowMap;
+T.ShaderChunk.tonemapping_pars_fragment = T.ShaderChunk.tonemapping_pars_fragment.replace(
+  'vec3 CustomToneMapping( vec3 color ) { return color; }',
+  `vec3 CustomToneMapping( vec3 color ) {
+    color = max(color, 0.0);
+    color = color * (1.0 + 0.12 * (color - 0.18) / (color + 0.18));
+    color = ACESFilmicToneMapping(color);
+    float l = dot(color, vec3(0.299, 0.587, 0.114));
+    return clamp(mix(vec3(l), color, 1.07), 0.0, 1.0);
+  }`,
+);
+renderer.toneMapping = T.CustomToneMapping;
+renderer.outputColorSpace = T.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+// Augusta's look from view3d.js.
+const L = { sky: '#bcdcf2', sun: '#fff3dd', sunI: 2.7, hemiSky: '#d2e8ff', hemiGround: '#4c7a37', hemiI: 1.25, tree: ['#2e7a3c', '#3c8f46', '#256a36'], trunk: '#8a5a3a', ground: '#5aa847' };
+const scene = new T.Scene();
+scene.background = new T.Color(L.sky);
+scene.fog = new T.Fog(new T.Color('#d6ecf8'), 260, 1700);
+const hemi = new T.HemisphereLight(L.hemiSky, L.hemiGround, L.hemiI);
+hemi.up = new T.Vector3(0, 0, 1);
+hemi.position.set(0, 0, 1);
+scene.add(hemi);
+// Stand-in for the game's sky light probe.
+scene.add(new T.AmbientLight('#c4d8ea', 0.45));
+const sun = new T.DirectionalLight(L.sun, L.sunI);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.04;
+scene.add(sun, sun.target);
+
+const ground = new T.Mesh(new T.PlaneGeometry(2000, 2000), new T.MeshLambertMaterial({ color: L.ground }));
+ground.receiveShadow = true;
+scene.add(ground);
+
+const timeU = { value: 0 };
+const tl = new T.TextureLoader();
+const load = (u, srgb = true) => new Promise((res) => tl.load(new URL(u, import.meta.url).href, (t) => {
+  if (srgb) t.colorSpace = T.SRGBColorSpace;
+  t.anisotropy = 4;
+  res(t);
+}, undefined, () => res(null)));
+const [foliage, bark, blossoms, barkLob] = await Promise.all([load('../assets/tex/foliage.png'), load('../assets/tex/bark.webp'), load('../assets/tex/blossoms.png'), load('../assets/tex/bark_loblolly.webp')]);
+if (bark) bark.wrapS = bark.wrapT = T.RepeatWrapping;
+const mats = makeTreeMaterials(T, foliage, timeU, blossoms);
+if (bark) {
+  mats.bark.map = bark;
+  mats.bark.color.setScalar(1.35);
+}
+// Loblolly trunks: the loblolly bark texture when present (lbark=0 to compare).
+const barkLobMat = mats.bark.clone();
+if (barkLob && Q.get('lbark') !== '0') {
+  barkLob.wrapS = barkLob.wrapT = T.RepeatWrapping;
+  barkLobMat.map = barkLob;
+}
+const propMat = makePropMaterial(T);
+const kinds = makeTrees(T);
+const props = makeProps(T);
+
+// Recommended instance sizes (yards): [height, aspect = height / width].
+const TREE = {
+  loblolly: [32, 3.0], loblolly2: [30, 3.0], dogwood: [7, 0.85], magnolia: [15, 1.45], oak_big: [14, 0.55],
+  oak: [12, 1.05], oak2: [12, 1.05], cypress: [11, 1.0], pine: [18, 2.3], palm: [12, 1.8],
+};
+const trunkCol = new T.Color(L.trunk);
+trunkCol.multiplyScalar(0.92 / Math.max(trunkCol.r, trunkCol.g, trunkCol.b)).lerp(new T.Color(1, 1, 1), 0.35);
+let seed = 7;
+const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+const M = new T.Matrix4(), q = new T.Quaternion(), s = new T.Vector3(), p = new T.Vector3(), Z = new T.Vector3(0, 0, 1);
+
+// Trees as the game draws them: instanced, scaled (width, width, height).
+function addTrees(kind, list) {
+  const g = kinds[kind];
+  const parts = [];
+  if (g.body) {
+    // Bush kinds (azalea, bush): instance colour = blossom colour.
+    parts.push([lod === 'far' && g.far ? g.far : g.body, mats.body, 'c']);
+    if (g.cards && lod !== 'far') parts.push([g.cards, g.cardsMat === 'bloom' ? mats.bloom : mats.leaf, 'c']);
+  } else {
+    parts.push([g.trunk, kind.startsWith('loblolly') ? barkLobMat : mats.bark, 't']);
+    if (lod === 'far') parts.push([g.far, g.farCards ? mats.leaf : mats.body, 'c']);
+    else {
+      parts.push([g.nearBody, mats.body, 'c']);
+      if (g.nearCards) parts.push([g.nearCards, g.cardsMat === 'bloom' ? mats.bloom : mats.leaf, 'c']);
+    }
+  }
+  for (const [geo, mat, ck] of parts) {
+    const im = new T.InstancedMesh(geo, mat, list.length);
+    im.castShadow = im.receiveShadow = true;
+    list.forEach((t, i) => {
+      p.set(t.x, t.y, -0.15);
+      q.setFromAxisAngle(Z, t.rot);
+      s.set(t.w, t.w2 || t.w, t.h);
+      im.setMatrixAt(i, M.compose(p, q, s));
+      im.setColorAt(i, ck === 't' ? trunkCol : new T.Color(t.col));
+    });
+    scene.add(im);
+  }
+}
+function tree(kind, x, y, k = 1) {
+  const [h0, A] = TREE[kind] || [10, 1];
+  const h = num('h', h0) * k * (0.92 + rnd() * 0.16);
+  const w = Q.has('w') ? num('w', 1) : h / A;
+  return { x, y, h, w: w * (0.94 + rnd() * 0.12), rot: rnd() * 6.28, col: new T.Color(L.tree[Math.floor(rnd() * 3)]).multiplyScalar(0.88 + rnd() * 0.24) };
+}
+const AZ = ['#ff4fa0', '#e2237f', '#ff7f9f', '#ffffff', '#f2545b', '#c2185b', '#ff9ec6'];
+function azaleas(cx, cy, rx, ry, n, kind = 'azalea') {
+  const list = [];
+  for (let i = 0; i < n; i++) {
+    const a = rnd() * 6.28, d = Math.sqrt(rnd());
+    const sz = 0.9 + rnd() * 0.7;
+    list.push({ x: cx + Math.cos(a) * rx * d, y: cy + Math.sin(a) * ry * d, w: sz * (1 + rnd() * 0.4), w2: sz, h: sz * 0.9, rot: rnd() * 6.28, col: AZ[Math.floor(rnd() * AZ.length)] });
+  }
+  addTrees(kind, list);
+}
+function propMesh(geo, list) {
+  const im = new T.InstancedMesh(geo, propMat, list.length);
+  im.castShadow = im.receiveShadow = true;
+  list.forEach((t, i) => {
+    p.set(t.x, t.y, t.z || 0);
+    q.setFromAxisAngle(Z, t.rot || 0);
+    s.setScalar(t.s || 1);
+    im.setMatrixAt(i, M.compose(p, q, s));
+  });
+  scene.add(im);
+  return im;
+}
+function crowd(x0, y0, w, d, n, face = Math.PI) {
+  const pg = props.patron, kinds2 = [pg.stand, pg.stand2, pg.stand3, pg.sit];
+  const lists = kinds2.map(() => []);
+  for (let i = 0; i < n; i++) {
+    const k = rnd() < 0.25 ? 3 : Math.floor(rnd() * 3);
+    lists[k].push({ x: x0 + rnd() * w, y: y0 + (k === 3 ? 0 : rnd() * d), rot: face + (rnd() - 0.5) * 0.8, s: 0.92 + rnd() * 0.16 });
+  }
+  kinds2.forEach((g, i) => lists[i].length && propMesh(g, lists[i]));
+}
+
+let target = new T.Vector3(0, 0, 5), dist = 30, az = 35, el = 12;
+const box = new T.Box3();
+const setView = (tz, d, e = 12) => { target.set(0, 0, tz); dist = d; el = e; };
+const n = num('n', 1);
+
+if (asset === 'list') {
+  document.getElementById('info').textContent = [...Object.keys(kinds), ...Object.keys(props)].join(' ');
+} else if (kinds[asset]) {
+  const g = kinds[asset];
+  if (g.body) {
+    const list = [];
+    for (let i = 0; i < n; i++) list.push({ x: (i % 4) * 2.2 - (Math.min(n, 4) - 1) * 1.1, y: Math.floor(i / 4) * 2.2, w: 1.4 * 1.2, w2: 1.4, h: 1.4 * 0.9, rot: i * 1.7, col: AZ[i % AZ.length] });
+    addTrees(asset, list);
+    setView(0.6, 6, 18);
+  } else {
+    const list = [];
+    for (let i = 0; i < n; i++) list.push(tree(asset, i * (TREE[asset]?.[0] || 10) / (TREE[asset]?.[1] || 1) * 1.1, 0));
+    addTrees(asset, list);
+    const h = list[0].h;
+    setView(h * 0.5, h * 1.6, 8);
+    target.x = (list.length - 1) * list[0].w * 0.55;
+  }
+} else if (asset === 'patron') {
+  const pg = props.patron;
+  [pg.stand, pg.stand2, pg.stand3, pg.sit].forEach((g, k) => {
+    const list = [];
+    for (let i = 0; i < 4; i++) list.push({ x: (k - 1.5) * 0.9, y: i * 1.2, rot: Math.PI * 0.5 * 0 + (i % 2) * 0.4, s: 1 });
+    propMesh(g, list);
+  });
+  setView(1.0, 5.5, 8);
+  target.y = 1.5;
+} else if (asset === 'chair') {
+  propMesh(props.chair, [{ x: 0, y: 0 }]);
+  setView(0.4, 2.2, 15);
+} else if (asset === 'ropeStake' || asset === 'ropeLine') {
+  const pts = [[-8, -2], [-2, 1], [4, 0], [10, 3]];
+  scene.add(Object.assign(new T.Mesh(props.makeRopeLine(pts, {}), propMat), { castShadow: true }));
+  crowd(-8, 2, 18, 3, 30);
+  setView(0.8, 10, 10);
+} else if (asset === 'stoneBridge') {
+  const m = new T.Mesh(props.makeStoneBridge({ length: num('len', 18) }), propMat);
+  m.castShadow = m.receiveShadow = true;
+  scene.add(m);
+  ground.position.z = -0.02;
+  // A creek under it.
+  const water = new T.Mesh(new T.PlaneGeometry(6, 60), new T.MeshLambertMaterial({ color: '#2a8fa6' }));
+  water.position.z = 0.0;
+  scene.add(water);
+  setView(0.8, 18, 10);
+} else if (asset === 'leaderboard') {
+  propMesh(props.leaderboard, [{ x: 0, y: 0 }]);
+  crowd(-6, 3, 12, 5, 24, Math.PI);
+  setView(3, 16, 6);
+  az = 200;
+} else if (asset === 'clubhouse') {
+  propMesh(props.clubhouse, [{ x: 0, y: 0 }]);
+  addTrees('oak_big', [{ ...tree('oak_big', 4, 26), h: 14, w: 26, rot: 1 }]);
+  setView(6, 70, 10);
+  az = 205;
+} else if (asset === 'cameraTower') {
+  propMesh(props.cameraTower, [{ x: 0, y: 0 }]);
+  setView(6, 22, 8);
+  az = 200;
+} else if (asset === 'cupFlag') {
+  propMesh(props.cupFlag.all, [{ x: 0, y: 0 }]);
+  setView(1.2, 4, 8);
+} else {
+  // The grove: a corner of Augusta: loblollies over dogwoods and an azalea
+  // bank, patrons behind the gallery rope.
+  for (let i = 0; i < 9; i++) addTrees(i % 2 ? 'loblolly2' : 'loblolly', [tree(i % 2 ? 'loblolly2' : 'loblolly', -40 + i * 10 + rnd() * 4, 18 + rnd() * 14)]);
+  addTrees('dogwood', [tree('dogwood', -18, 8), tree('dogwood', 2, 10), tree('dogwood', 16, 7)]);
+  addTrees('magnolia', [tree('magnolia', 30, 16)]);
+  azaleas(-4, 4, 14, 2.5, 60);
+  crowd(-16, -6, 30, 2.5, 50, Math.PI * 1.5);
+  scene.add(Object.assign(new T.Mesh(props.makeRopeLine([[-18, -3], [16, -3]], {}), propMat), { castShadow: true }));
+  setView(8, 48, 10);
+  target.y = 6;
+}
+
+dist = num('dist', dist);
+az = num('az', az);
+el = num('el', el);
+target.x += num('tx', 0);
+target.y += num('ty', 0);
+target.z = num('tz', target.z);
+const cam = new T.PerspectiveCamera(num('fov', 50), innerWidth / innerHeight, 0.1, 5000);
+cam.up.set(0, 0, 1);
+const ar = (az * Math.PI) / 180, er = (el * Math.PI) / 180;
+cam.position.set(target.x + Math.sin(ar) * Math.cos(er) * dist, target.y - Math.cos(ar) * Math.cos(er) * dist, target.z + Math.sin(er) * dist);
+cam.lookAt(target);
+// Sun from behind the camera's left, fairly high, shadow box round the scene.
+sun.position.set(target.x - 60, target.y - 80, target.z + 110);
+sun.target.position.copy(target);
+const sc = sun.shadow.camera, R = Math.max(25, dist * 0.9);
+sc.left = -R; sc.right = R; sc.top = R; sc.bottom = -R; sc.near = 1; sc.far = 400;
+sc.updateProjectionMatrix();
+
+document.getElementById('info').textContent = `${asset} (${lod}) dist ${dist}`;
+if (Q.get('info') === '0') document.getElementById('info').style.display = 'none';
+let frames = 0;
+const animate = Q.get('anim') === '1';
+function frame(t) {
+  timeU.value = animate ? t / 1000 : 1.0;
+  renderer.render(scene, cam);
+  if (++frames === 2) window.__ready = true;
+  if (animate || frames < 2) requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+addEventListener('resize', () => {
+  renderer.setSize(innerWidth, innerHeight);
+  cam.aspect = innerWidth / innerHeight;
+  cam.updateProjectionMatrix();
+  renderer.render(scene, cam);
+});
+</script>
+</body>
+</html>

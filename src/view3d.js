@@ -17,6 +17,7 @@ const TAU = Math.PI * 2;
 const EDGE = 6; // terrain height at the edge of the course area
 const STEP = 1; // terrain grid spacing, yards
 import { paintAtlas, makeTrees, makeTreeMaterials, makeGrassGeo, makeGrassMaterial } from './flora.js?v=16';
+import { makeProps, makePropMaterial } from './props.js?v=16';
 const VERSIONED = new URL(import.meta.url).search; // same ?v= as this file
 
 // Colours and light for each course (sRGB hex).
@@ -283,6 +284,7 @@ function paintTurf(hole, box, px, L) {
   }
   // Bridges.
   for (const br of hole.bridges || []) {
+    if (br.style === 'stone') continue; // modelled in 3D
     c.save();
     c.translate(br.x, br.y);
     c.rotate(br.ang);
@@ -602,10 +604,17 @@ export class View3D {
     this.atlasTex.colorSpace = T.SRGBColorSpace;
     this.atlasTex.anisotropy = 4;
     this.treeKinds = makeTrees(T);
+    this.props = makeProps(T);
+    this.propMat = makePropMaterial(T);
     const mats = makeTreeMaterials(T, this.atlasTex, this.timeU);
     this.leafMat = mats.leaf;
     this.bodyMat = mats.body;
     this.barkMat = mats.bark;
+    this.bloomMat = mats.bloom;
+    // Loblolly pines get their own plated bark.
+    this.barkLMat = this.barkMat.clone();
+    this.barkLMat.onBeforeCompile = this.barkMat.onBeforeCompile;
+    this.barkLMat.customProgramCacheKey = this.barkMat.customProgramCacheKey;
     // Swap in the painted foliage atlas and bark when they arrive.
     const tl = new T.TextureLoader();
     tl.load(new URL('../assets/tex/foliage.png', import.meta.url).href + VERSIONED, (t) => {
@@ -613,6 +622,20 @@ export class View3D {
       t.anisotropy = 4;
       this.leafMat.map = this.bodyMat.map = t;
       this.leafMat.needsUpdate = this.bodyMat.needsUpdate = true;
+    });
+    tl.load(new URL('../assets/tex/blossoms.png', import.meta.url).href + VERSIONED, (t) => {
+      t.colorSpace = T.SRGBColorSpace;
+      t.anisotropy = 4;
+      this.bloomMat.map = t;
+      this.bloomMat.needsUpdate = true;
+    });
+    tl.load(new URL('../assets/tex/bark_loblolly.webp', import.meta.url).href + VERSIONED, (t) => {
+      t.colorSpace = T.SRGBColorSpace;
+      t.wrapS = t.wrapT = T.RepeatWrapping;
+      t.anisotropy = 4;
+      this.barkLMat.map = t;
+      this.barkLMat.color.setScalar(1.25);
+      this.barkLMat.needsUpdate = true;
     });
     tl.load(new URL('../assets/tex/bark.webp', import.meta.url).href + VERSIONED, (t) => {
       t.colorSpace = T.SRGBColorSpace;
@@ -625,7 +648,7 @@ export class View3D {
     this.grassU = {
       uTime: this.timeU, uMask: { value: null }, uHeight: { value: null }, uTurf: { value: null },
       uBox: { value: new T.Vector4() }, uGrid: { value: new T.Vector4() }, uCentre: { value: new T.Vector2() },
-      uSpacing: { value: 0.55 }, uFar: { value: 44 },
+      uSpacing: { value: 0.55 }, uFar: { value: 44 }, uRoughH: { value: 1 },
       uBalls: { value: [0, 1, 2, 3].map(() => new T.Vector4()) },
     };
     {
@@ -746,6 +769,7 @@ export class View3D {
     this.buildWater(mask, L, group);
     // Trees, bushes and grass.
     this.buildTrees(hole, L, group);
+    this.buildProps(hole, L, group);
     this.buildGrass();
     // Flag, cup, tee markers.
     this.buildPin(hole, L, group);
@@ -810,11 +834,13 @@ export class View3D {
     // The lie of the land: an elevation profile along the hole (spec.elev,
     // [[yards along the line, height], ...]) lifts or drops everything
     // around it, so 10 falls away from the tee and 18 climbs to the green.
-    const elev = hole.spec && hole.spec.elev;
+    const elev = hole.elev || (hole.spec && hole.spec.elev);
+    const hasLand = elev || (hole.mounds && hole.mounds.length);
     const E = new Float32Array(N);
     let eMean = 0;
-    if (elev && elev.length) {
+    if (hasLand) {
       const at = (sv) => {
+        if (!elev) return 0;
         if (sv <= elev[0][0]) return elev[0][1];
         for (let q = 1; q < elev.length; q++) {
           if (sv <= elev[q][0]) {
@@ -827,7 +853,7 @@ export class View3D {
       // Distance along the line on a coarse grid, then smoothed onto the grid.
       const C = 4, cw = Math.ceil(box.w / C) + 2, ch = Math.ceil(box.h / C) + 2;
       const ce = new Float32Array(cw * ch);
-      for (let j = 0; j < ch; j++) for (let i = 0; i < cw; i++) ce[j * cw + i] = at(hole.nearest(box.x + i * C, box.y + j * C)[1]);
+      for (let j = 0; j < ch; j++) for (let i = 0; i < cw; i++) ce[j * cw + i] = hole.heightAt ? hole.heightAt(box.x + i * C, box.y + j * C) : at(hole.nearest(box.x + i * C, box.y + j * C)[1]);
       for (let j = 0; j < gh; j++) {
         for (let i = 0; i < gw; i++) {
           const fx = (i * step) / C, fy = (j * step) / C;
@@ -835,7 +861,7 @@ export class View3D {
           E[j * gw + i] = (ce[c] * (1 - u) + ce[c + 1] * u) * (1 - v) + (ce[c + cw] * (1 - u) + ce[c + cw + 1] * u) * v;
         }
       }
-      blur(E, Math.round(6 / step));
+      blur(E, Math.round(3 / step));
       for (let k = 0; k < N; k++) eMean += E[k];
       eMean /= N;
     }
@@ -1379,7 +1405,14 @@ export class View3D {
     this.treeKindsLive = [];
     const lists = {};
     hole.trees.forEach((t) => {
-      const kind = t.pine ? 'pine' : t.palm ? 'palm' : t.cypress ? 'cypress' : r() < 0.5 ? 'oak' : 'oak2';
+      let kind = t.pine ? 'pine' : t.palm ? 'palm' : t.cypress ? 'cypress' : r() < 0.5 ? 'oak' : 'oak2';
+      if (L.aug) {
+        // Augusta: tall loblollies, with dogwoods, magnolias and the like
+        // where the course data plants them.
+        const sp = { dogwood: 'dogwood', cherry: 'dogwood', magnolia: 'magnolia', holly: 'magnolia' }[t.kind];
+        kind = sp || (t.pine ? (r() < 0.5 ? 'loblolly' : 'loblolly2') : kind);
+      }
+      if (!this.treeKinds[kind]) kind = 'oak';
       (lists[kind] = lists[kind] || []).push(t);
     });
     for (const [kind, list] of Object.entries(lists)) {
@@ -1395,18 +1428,22 @@ export class View3D {
         return im;
       };
       const live = {
-        trunk: mk(g.trunk, this.barkMat), near: mk(g.nearBody, this.bodyMat), cards: g.nearCards ? mk(g.nearCards, this.leafMat) : null,
+        trunk: mk(g.trunk, kind.startsWith('loblolly') ? this.barkLMat : this.barkMat), near: mk(g.nearBody, this.bodyMat),
+        cards: g.nearCards ? mk(g.nearCards, g.cardsMat === 'bloom' ? this.bloomMat : this.leafMat) : null,
         far: mk(g.far, g.farCards ? this.leafMat : this.bodyMat), items: [],
       };
       for (const t of list) {
-        const width = kind === 'pine' ? t.r * 2.6 : kind === 'cypress' ? t.r * 2.3 : kind === 'palm' ? t.r * 2.2 : t.r * 2.3;
         const h = t.h * (kind.startsWith('oak') ? 1.05 : 1);
+        // Models built at true proportions say how wide they want to be.
+        let width = kind === 'pine' ? t.r * 2.6 : kind === 'cypress' ? t.r * 2.3 : kind === 'palm' ? t.r * 2.2 : t.r * 2.3;
+        if (g.aspect) width = Math.max(width * 0.8, h / g.aspect);
         p.set(t.x, t.y, this.heightAt(t.x, t.y) - 0.15);
         q.setFromAxisAngle(zAxis, r() * TAU);
         s.set(width * (0.92 + r() * 0.16), width * (0.92 + r() * 0.16), h);
         m.compose(p, q, s);
         const leaf = col.set(L.tree[Math.floor(r() * L.tree.length)]).multiplyScalar(0.88 + r() * 0.24);
-        live.items.push({ x: t.x, y: t.y, w: width, m: m.toArray(), leaf: [leaf.r, leaf.g, leaf.b], bark: [trunkCol.r, trunkCol.g, trunkCol.b] });
+        const bark = kind.startsWith('loblolly') ? [0.95, 0.92, 0.9] : [trunkCol.r, trunkCol.g, trunkCol.b];
+        live.items.push({ x: t.x, y: t.y, w: width, m: m.toArray(), leaf: [leaf.r, leaf.g, leaf.b], bark });
       }
       this.treeKindsLive.push(live);
     }
@@ -1423,6 +1460,21 @@ export class View3D {
         bushes.push([x, y, 0.7 + r() * 0.6, ['#ff5fa2', '#e23a86', '#ff8fbf', '#ffffff', '#ff6f8a', '#d81b60'][Math.floor(r() * 6)]]);
       }
     }
+    if (L.aug) {
+      // Banks of azaleas among the pines; each bank keeps mostly one colour.
+      const AZ = ['#ff4fa0', '#e2237f', '#ff7f9f', '#ffffff', '#f2545b', '#c2185b', '#ff9ec6'];
+      for (const f of hole.species || []) {
+        if (f.kind !== 'azalea') continue;
+        const main = AZ[Math.floor(r() * AZ.length)];
+        const n = Math.max(f.n || 0, Math.round(f.rx * f.ry * 0.5));
+        for (let i = 0; i < n; i++) {
+          const a = r() * TAU, d = Math.sqrt(r());
+          const u = Math.cos(a) * f.rx * d, v = Math.sin(a) * f.ry * d, rot = f.rot || 0;
+          const x = f.x + u * Math.cos(rot) - v * Math.sin(rot), y = f.y + u * Math.sin(rot) + v * Math.cos(rot);
+          bushes.push([x, y, 0.9 + r() * 0.7, r() < 0.7 ? main : AZ[Math.floor(r() * AZ.length)]]);
+        }
+      }
+    }
     if (L.gorse) {
       // Gorse grows in clumps, not as an even scatter.
       const box = this.box;
@@ -1437,7 +1489,30 @@ export class View3D {
         }
       }
     }
-    if (bushes.length) {
+    if (bushes.length && L.aug && this.treeKinds.azalea) {
+      // Azaleas share the trees' near/far switching (no trunk).
+      const ka = this.treeKinds.azalea;
+      const mk = (geo, mat) => {
+        const im = new T.InstancedMesh(geo, mat, bushes.length);
+        im.userData.shared = true;
+        im.castShadow = im.receiveShadow = true;
+        im.frustumCulled = false;
+        im.count = 0;
+        im.setColorAt(0, col.set(1, 1, 1));
+        group.add(im);
+        return im;
+      };
+      const live = { trunk: null, near: mk(ka.body, this.bodyMat), cards: mk(ka.cards, this.bloomMat), far: mk(ka.far, this.bodyMat), items: [], bushes: true };
+      for (const [x, y, sz, c] of bushes) {
+        p.set(x, y, this.heightAt(x, y) - 0.08);
+        q.setFromAxisAngle(zAxis, r() * TAU);
+        s.set(sz * 1.2 * (1 + r() * 0.3), sz, sz * 0.9);
+        m.compose(p, q, s);
+        col.set(c);
+        live.items.push({ x, y, w: 0, m: m.toArray(), leaf: [col.r, col.g, col.b] });
+      }
+      this.treeKindsLive.push(live);
+    } else if (bushes.length) {
       const kb = this.treeKinds.bush;
       const body = new T.InstancedMesh(kb.body, this.bodyMat, bushes.length);
       const cards = new T.InstancedMesh(kb.cards, this.leafMat, bushes.length);
@@ -1461,6 +1536,108 @@ export class View3D {
     }
   }
 
+  // Patrons behind the ropes, the clubhouse, scoreboards, TV towers and the
+  // stone bridges (Augusta's course data lists them; other courses don't).
+  buildProps(hole, L, group) {
+    const T = this.T, P = this.props, mat = this.propMat;
+    const r = seeded(hole.index * 17 + 3);
+    const m = new T.Matrix4(), q = new T.Quaternion(), s = new T.Vector3(), p = new T.Vector3(), zAxis = new T.Vector3(0, 0, 1);
+    const place = (geo, x, y, ang, sc = 1, shared = true, z = null) => {
+      const o = new T.Mesh(geo, mat);
+      o.position.set(x, y, z ?? this.heightAt(x, y) - 0.05);
+      o.rotation.z = ang - Math.PI / 2; // props face +y
+      o.scale.setScalar(sc);
+      o.castShadow = o.receiveShadow = true;
+      o.userData.shared = shared;
+      group.add(o);
+      return o;
+    };
+    // The crowd: rows of patrons behind each rope line, facing the play.
+    const spacing = [1.5, 1.15, 0.95][this.quality] || 1.15;
+    const variants = ['stand', 'stand2', 'stand3', 'sit'];
+    for (const g of hole.gallery || []) {
+      const pts = g.line;
+      if (!pts || pts.length < 2) continue;
+      const rope = new T.Mesh(P.makeRopeLine(pts, { heightAt: (x, y) => this.heightAt(x, y) }), mat);
+      rope.castShadow = rope.receiveShadow = true;
+      group.add(rope);
+      const lists = [[], [], [], []];
+      const rows = Math.max(1, Math.min(5, g.rows || 2));
+      for (let i = 0; i < pts.length - 1; i++) {
+        const [ax, ay] = pts[i], [bx, by] = pts[i + 1];
+        const len = Math.hypot(bx - ax, by - ay) || 1, dx = (bx - ax) / len, dy = (by - ay) / len;
+        // side +1 is the right-hand normal (-dy, dx), pointing away from the hole.
+        const nx = -dy * (g.side || 1), ny = dx * (g.side || 1);
+        const face = Math.atan2(-ny, -nx);
+        for (let row = 0; row < rows; row++) {
+          // Thinner further back, with gaps here and there.
+          const fill = row === 0 ? 0.92 : 0.82 - row * 0.1;
+          for (let u = r() * spacing; u < len; u += spacing * (0.85 + r() * 0.3)) {
+            if (r() > fill) continue;
+            const off = 1.3 + row * 1.15 + (r() - 0.5) * 0.5, j = (r() - 0.5) * 0.35;
+            const x = ax + dx * (u + j) + nx * off, y = ay + dy * (u + j) + ny * off;
+            const v = row === 0 && r() < 0.22 ? 3 : Math.floor(r() * 3);
+            lists[v].push([x, y, face + (r() - 0.5) * 0.9, 0.92 + r() * 0.16]);
+          }
+        }
+      }
+      lists.forEach((list, v) => {
+        if (!list.length) return;
+        const im = new T.InstancedMesh(P.patron[variants[v]], mat, list.length);
+        im.userData.shared = true;
+        im.castShadow = this.quality > 0;
+        im.receiveShadow = true;
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, zs = 0;
+        list.forEach(([x, y, a, sc], i) => {
+          const z = this.heightAt(x, y);
+          p.set(x, y, z - 0.03);
+          q.setFromAxisAngle(zAxis, a - Math.PI / 2);
+          s.setScalar(sc);
+          im.setMatrixAt(i, m.compose(p, q, s));
+          x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); zs += z;
+        });
+        im.boundingSphere = new T.Sphere(new T.Vector3((x0 + x1) / 2, (y0 + y1) / 2, zs / list.length + 1), Math.hypot(x1 - x0, y1 - y0) / 2 + 3);
+        group.add(im);
+      });
+    }
+    // Set pieces.
+    for (const lm of hole.landmarks || []) {
+      const a = lm.ang ?? -Math.PI / 2;
+      if (lm.kind === 'clubhouse') place(P.clubhouse, lm.x, lm.y, a, 1, true, this.heightAt(lm.x, lm.y) - 0.6);
+      else if (lm.kind === 'leaderboard') place(P.leaderboard, lm.x, lm.y, a);
+      else if (lm.kind === 'scoreboard-small') place(P.leaderboard, lm.x, lm.y, a, 0.55);
+      else if (lm.kind === 'camera-tower') place(P.cameraTower, lm.x, lm.y, a);
+      else if (lm.kind === 'oak' && this.treeKinds.oak_big) {
+        const k = this.treeKinds.oak_big, h = 14, w = h / (k.aspect || 0.55);
+        p.set(lm.x, lm.y, this.heightAt(lm.x, lm.y) - 0.15);
+        q.setFromAxisAngle(zAxis, a);
+        m.compose(p, q, s.set(w, w, h));
+        for (const [geo, mt] of [[k.trunk, this.barkMat], [k.nearBody, this.bodyMat], [k.nearCards, this.leafMat]]) {
+          if (!geo) continue;
+          const im = new T.InstancedMesh(geo, mt, 1);
+          im.setMatrixAt(0, m);
+          im.setColorAt(0, new T.Color(mt === this.barkMat ? L.trunk : L.tree[0]));
+          im.userData.shared = true;
+          im.castShadow = im.receiveShadow = true;
+          im.frustumCulled = false;
+          group.add(im);
+        }
+      }
+    }
+    // Stone footbridges over the creeks.
+    for (const br of hole.bridges || []) {
+      if (br.style !== 'stone') continue;
+      const geo = P.makeStoneBridge({ length: br.len + 2, width: br.name === 'sarazen' ? 3.2 : 2.8, rise: Math.min(1.6, 0.6 + br.len * 0.05), seed: Math.round(br.x * 7 + br.y) });
+      const c = Math.cos(br.ang), sn = Math.sin(br.ang), e = br.len / 2 + 1.5;
+      const z = Math.max(this.heightAt(br.x + c * e, br.y + sn * e), this.heightAt(br.x - c * e, br.y - sn * e));
+      const o = new T.Mesh(geo, mat);
+      o.position.set(br.x, br.y, z - 0.1);
+      o.rotation.z = br.ang;
+      o.castShadow = o.receiveShadow = true;
+      group.add(o);
+    }
+  }
+
   // Grass tufts in the rough near the line of play.
   // The grass field is shared between holes: point it at this hole's maps.
   buildGrass() {
@@ -1474,6 +1651,7 @@ export class View3D {
     U.uMask.value = this.maskTex;
     U.uHeight.value = ht;
     U.uTurf.value = this.turfTex;
+    U.uRoughH.value = this.look.aug ? 0.6 : 1; // Augusta's second cut is short
     U.uBox.value.set(this.box.x, this.box.y, this.box.w, this.box.h);
     U.uGrid.value.set(g.x, g.y, g.step, 0);
     this.grass.visible = true;
@@ -1659,15 +1837,19 @@ export class View3D {
     const nearD = [35, 60, 95][this.quality];
     for (const k of this.treeKindsLive) {
       let a = 0, n = 0, f = 0;
-      const TA = k.trunk.instanceMatrix.array, NA = k.near.instanceMatrix.array, FA = k.far.instanceMatrix.array;
-      const TC = k.trunk.instanceColor.array, NC = k.near.instanceColor.array, FC = k.far.instanceColor.array;
+      const NA = k.near.instanceMatrix.array, FA = k.far.instanceMatrix.array;
+      const NC = k.near.instanceColor.array, FC = k.far.instanceColor.array;
+      const TA = k.trunk && k.trunk.instanceMatrix.array, TC = k.trunk && k.trunk.instanceColor.array;
+      const nd = k.bushes ? nearD * 0.6 : nearD;
       for (const t of k.items) {
         const d = Math.hypot(t.x - eye.x, t.y - eye.y);
-        if (d < t.w * 0.5 + 2.5) continue;
-        TA.set(t.m, a * 16);
-        TC.set(t.bark, a * 3);
-        a++;
-        if (d < nearD) {
+        if (d < t.w * 0.5 + 2.5 && !k.bushes) continue;
+        if (TA) {
+          TA.set(t.m, a * 16);
+          TC.set(t.bark, a * 3);
+          a++;
+        }
+        if (d < nd) {
           NA.set(t.m, n * 16);
           NC.set(t.leaf, n * 3);
           n++;
@@ -1677,7 +1859,7 @@ export class View3D {
           f++;
         }
       }
-      k.trunk.count = a;
+      if (k.trunk) k.trunk.count = a;
       k.near.count = n;
       k.far.count = f;
       if (k.cards) {
@@ -2046,8 +2228,10 @@ export class View3D {
     this.settleUntil = performance.now() + 2500;
     // Soft leaf edges when there is MSAA to resolve them.
     if (this.leafMat.alphaToCoverage !== !this.soft) {
-      this.leafMat.alphaToCoverage = !this.soft; // soft leaf edges with the canvas MSAA
-      this.leafMat.needsUpdate = true;
+      for (const mt of [this.leafMat, this.bloomMat]) {
+        mt.alphaToCoverage = !this.soft; // soft leaf edges with the canvas MSAA
+        mt.needsUpdate = true;
+      }
     }
     // Shadow detail by tier.
     const sm = [1024, 1536, 2048][q];
