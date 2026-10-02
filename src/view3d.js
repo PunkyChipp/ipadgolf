@@ -13,7 +13,7 @@
 const TAU = Math.PI * 2;
 const EDGE = 6; // terrain height at the edge of the course area
 const STEP = 1; // terrain grid spacing, yards
-import { paintAtlas, makeTrees, makeTreeMaterials, makeGrassGeo, makeGrassMaterial } from './flora.js?v=14';
+import { paintAtlas, makeTrees, makeTreeMaterials, makeGrassGeo, makeGrassMaterial } from './flora.js?v=15';
 const VERSIONED = new URL(import.meta.url).search; // same ?v= as this file
 
 // Colours and light for each course (sRGB hex).
@@ -478,10 +478,15 @@ export class View3D {
     try { forced = localStorage.getItem('pocketlinks.gfx'); } catch {}
     const dbg = renderer.getContext().getExtension('WEBGL_debug_renderer_info');
     const gpu = dbg ? String(renderer.getContext().getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : '';
-    this.quality = forced != null ? Math.max(0, Math.min(2, +forced)) : /swiftshader|llvmpipe|software/i.test(gpu) ? 0 : 2;
-    this.autoQuality = forced == null;
+    this.soft = /swiftshader|llvmpipe|software/i.test(gpu);
+    this.mode = forced === '0' || forced === '1' || forced === '2' ? +forced : 'auto';
+    this.quality = this.mode === 'auto' ? (this.soft ? 0 : 2) : this.mode;
+    this.autoQuality = this.mode === 'auto';
+    this.resScale = 1; // dynamic resolution, 0.6 to 1
     this.frameMs = 16;
-    this.slowFrames = 0;
+    this.speedT = 0;
+    this.settleUntil = 0;
+    this.noClimbUntil = 0;
     this.lastFrame = 0;
 
     this.buildShared();
@@ -494,7 +499,7 @@ export class View3D {
     this.h = h;
     this.dpr = dpr;
     if (!this.renderer) return;
-    const pr = Math.min(dpr, [1, 1.5, 2][this.quality]);
+    const pr = Math.max(0.75, Math.min(dpr, [1.25, 1.5, 2][this.quality]) * this.resScale);
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w, h, false);
     this.cv.style.width = w + 'px';
@@ -616,8 +621,13 @@ export class View3D {
       const geo = makeGrassGeo(T);
       const ig = new T.InstancedBufferGeometry();
       for (const k of ['position', 'normal', 'color', 'uv']) ig.setAttribute(k, geo.attributes[k]);
+      // Nearest cells first, so drawing fewer instances shrinks the field
+      // around its centre rather than cutting off a strip.
+      const cells = [];
+      for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) cells.push([i - N / 2, j - N / 2]);
+      cells.sort((a, b) => a[0] * a[0] + a[1] * a[1] - (b[0] * b[0] + b[1] * b[1]));
       const off = new Float32Array(N * N * 2);
-      for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) off.set([i - N / 2, j - N / 2], (j * N + i) * 2);
+      cells.forEach((c, k) => off.set(c, k * 2));
       ig.setAttribute('aOff', new T.InstancedBufferAttribute(off, 2));
       ig.instanceCount = N * N;
       this.grass = new T.Mesh(ig, makeGrassMaterial(T, this.grassU));
@@ -1327,7 +1337,8 @@ export class View3D {
     U.uTurf.value = this.turfTex;
     U.uBox.value.set(this.box.x, this.box.y, this.box.w, this.box.h);
     U.uGrid.value.set(g.x, g.y, g.step, 0);
-    this.grass.visible = this.quality > 0;
+    this.grass.visible = true;
+    this.settleUntil = performance.now() + 3000;
   }
 
   buildPin(hole, L, group) {
@@ -1790,23 +1801,54 @@ export class View3D {
   }
 
   // Drop a quality level when frames stay slow for a couple of seconds.
+  // Keep the frame rate up: first trim the resolution a little at a time,
+  // then drop a quality tier; climb back when there's headroom. Frames just
+  // after loading a hole or changing settings are ignored (shader compiles).
   trackSpeed() {
     const now = performance.now();
     const dt = now - this.lastFrame;
     this.lastFrame = now;
-    if (!this.autoQuality || this.quality === 0 || dt > 500) return;
+    if (!this.autoQuality || dt > 500 || now < this.settleUntil) return;
     this.frameMs += (dt - this.frameMs) * 0.05;
-    this.slowFrames = this.frameMs > 42 ? this.slowFrames + 1 : 0;
-    if (this.slowFrames > 90) {
-      this.slowFrames = 0;
-      this.frameMs = 16;
-      this.setQuality(this.quality - 1);
-    }
+    this.speedT += dt;
+    if (this.frameMs > 36 && this.speedT > 1500) {
+      this.speedT = 0;
+      if (this.resScale > 0.75) this.setResScale(this.resScale - 0.1);
+      else if (this.quality > 0) {
+        this.noClimbUntil = now + 90000;
+        this.setQuality(this.quality - 1);
+      }
+    } else if (this.frameMs < 21 && this.speedT > 5000) {
+      this.speedT = 0;
+      if (this.resScale < 1) this.setResScale(Math.min(1, this.resScale + 0.1));
+      else if (this.quality < 2 && !this.soft && now > this.noClimbUntil) this.setQuality(this.quality + 1);
+    } else if (this.speedT > 6000) this.speedT = 0;
+  }
+
+  setResScale(k) {
+    this.resScale = k;
+    this.frameMs = 25;
+    this.settleUntil = performance.now() + 800;
+    if (this.w) this.resize(this.w, this.h, this.dpr);
+  }
+
+  // 'auto' or a fixed tier 0-2 (remembered on this device).
+  setGraphics(mode) {
+    this.mode = mode;
+    this.autoQuality = mode === 'auto';
+    try {
+      if (mode === 'auto') localStorage.removeItem('pocketlinks.gfx');
+      else localStorage.setItem('pocketlinks.gfx', String(mode));
+    } catch {}
+    this.resScale = 1;
+    this.setQuality(mode === 'auto' ? (this.soft ? 0 : 2) : mode);
   }
 
   setQuality(q) {
     this.quality = q;
     this.treeEye = null;
+    this.frameMs = 25;
+    this.settleUntil = performance.now() + 2500;
     // Soft leaf edges when there is MSAA to resolve them.
     if (this.leafMat.alphaToCoverage !== q >= 2) {
       this.leafMat.alphaToCoverage = q >= 2;
@@ -1815,9 +1857,13 @@ export class View3D {
     this.bloom.enabled = q >= 2;
     this.composer.renderTarget1.samples = this.composer.renderTarget2.samples = q >= 2 ? 4 : 0;
     if (this.grass) {
-      this.grass.visible = q > 0 && !!this.hole;
-      this.grassU.uSpacing.value = q >= 2 ? 0.55 : 0.85;
-      this.grassU.uFar.value = q >= 2 ? 44 : 50;
+      // Grass at every tier: just sparser on the lower ones.
+      this.grass.visible = !!this.hole;
+      const far = [28, 36, 44][q];
+      this.grassU.uSpacing.value = 0.55;
+      this.grassU.uFar.value = far;
+      const r = far / 0.55 + 4;
+      this.grass.geometry.instanceCount = Math.min(160 * 160, Math.ceil(Math.PI * r * r));
     }
     if (this.w) this.resize(this.w, this.h, this.dpr);
   }

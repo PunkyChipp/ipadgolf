@@ -1,11 +1,11 @@
-import { buildHole as buildHoleRaw, windFor, HOLES, COURSES, courseOf, T, TERRAIN_NAMES } from './course.js?v=14';
+import { buildHole as buildHoleRaw, windFor, HOLES, COURSES, courseOf, T, TERRAIN_NAMES } from './course.js?v=15';
 import {
   simulateShot, CLUBS, PUTTER, PUTT_SCALES, SHAPES, FULL_SHAPES, SHORT_SHAPES, GEAR, GEAR_STATS, DEFAULT_GEAR, gearFor, MISHIT, meterWindow, lieEffect, suggestClub, suggestPuttScale, shotSeed, shotLabel, strikeOf, previewShot, flightParams, flightPoint,
-} from './sim.js?v=14';
-import { Renderer } from './render.js?v=14';
-import { Sound } from './audio.js?v=14';
-import { Link, makeCode, cleanCode } from './net.js?v=14';
-import { View3D, parseColor } from './view3d.js?v=14';
+} from './sim.js?v=15';
+import { Renderer } from './render.js?v=15';
+import { Sound } from './audio.js?v=15';
+import { Link, makeCode, cleanCode } from './net.js?v=15';
+import { View3D, parseColor } from './view3d.js?v=15';
 
 const $ = (s) => document.querySelector(s);
 
@@ -2816,6 +2816,7 @@ on('#menuBtn', () => {
   sound.click();
   $('#pauseCard').innerHTML = scorecardHTML(G);
   $('#btnPauseSound').textContent = sound.muted ? 'Sound: Off' : 'Sound: On';
+  refreshGfxBtn();
   setScreen('pause');
 });
 on('#btnResume', () => {
@@ -2836,6 +2837,20 @@ on('#btnPauseSound', () => {
   sound.setMuted(!sound.muted);
   store.set('muted', sound.muted);
   $('#btnPauseSound').textContent = sound.muted ? 'Sound: Off' : 'Sound: On';
+});
+// Graphics: Auto adapts to the device; High, Medium and Low are fixed.
+const GFX_MODES = ['auto', 2, 1, 0];
+const GFX_NAMES = { auto: 'Auto', 2: 'High', 1: 'Medium', 0: 'Low' };
+function refreshGfxBtn() {
+  const b = $('#btnPauseGfx');
+  b.hidden = !V3.ok;
+  b.textContent = `Graphics: ${GFX_NAMES[V3.mode] ?? 'Auto'}`;
+}
+on('#btnPauseGfx', () => {
+  sound.click();
+  const i = GFX_MODES.indexOf(V3.mode);
+  V3.setGraphics(GFX_MODES[(i + 1) % GFX_MODES.length]);
+  refreshGfxBtn();
 });
 on('#btnQuit', () => {
   sound.click();
