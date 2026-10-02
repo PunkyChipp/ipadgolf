@@ -1,9 +1,27 @@
 // Shot simulation. Pure and deterministic: the same inputs and seed always
 // give the same result, so two iPads can replay each other's shots exactly.
-import { T, TERRAIN_NAMES, rng, hashSeed } from './course.js?v=15';
+import { T, TERRAIN_NAMES, rng, hashSeed } from './course.js?v=16';
 
 export const G = 10.72; // gravity, yards/s²
 export const CUP_R = 0.075; // a little larger than a real cup (0.059 yd)
+
+// The ball falling into the cup: it carries on over the lip toward the
+// middle, catches the far side and drops below the surface (z < 0).
+function sink(hole, frames, x, y, vx = 0, vy = 0) {
+  const n = 22;
+  const sp = Math.hypot(vx, vy);
+  for (let i = 1; i <= n; i++) {
+    const k = i / n;
+    const e = 1 - (1 - k) * (1 - k);
+    // A touch of momentum past centre, pulled back by the far wall.
+    const over = sp > 0 ? Math.sin(k * Math.PI) * Math.min(0.03, sp * 0.012) : 0;
+    frames.push({
+      x: x + (hole.pin.x - x) * e + (vx / (sp || 1)) * over,
+      y: y + (hole.pin.y - y) * e + (vy / (sp || 1)) * over,
+      z: -0.13 * k * k,
+    });
+  }
+}
 export const FPS = 60;
 
 // carry/roll in yards on a flat fairway with no wind; up = time for the swing
@@ -300,6 +318,7 @@ export function simulateShot(hole, ball, input, wind, seed) {
   if (land === T.GREEN && Math.hypot(last.x - hole.pin.x, last.y - hole.pin.y) < CUP_R * 1.6) {
     res.outcome = 'holed';
     res.events.push({ type: 'dunk', f: frames.length - 1 });
+    sink(hole, frames, last.x, last.y);
     return finish(hole, ball, res, { x: hole.pin.x, y: hole.pin.y });
   }
 
@@ -410,7 +429,7 @@ function bounceAndRoll(hole, x, y, hx, hy, run, land, inV, frames, res, mishit) 
     }
     // Dropping straight into the cup on a gentle bounce.
     if (ter === T.GREEN && Math.hypot(x - hole.pin.x, y - hole.pin.y) < CUP_R * 1.3 && vz < 3) {
-      frames.push({ x: hole.pin.x, y: hole.pin.y, z: 0 });
+      sink(hole, frames, x, y, dirx * vh, diry * vh);
       res.outcome = 'holed';
       return;
     }
@@ -477,7 +496,7 @@ function roll(hole, x, y, vx, vy, frames, res, hop) {
       if (cd < CUP_R) {
         const s = Math.hypot(vx, vy);
         if (s < 1.35 || (cd < CUP_R * 0.5 && s < 2.1)) {
-          frames.push({ x: hole.pin.x, y: hole.pin.y, z: 0 });
+          sink(hole, frames, x, y, vx, vy);
           res.outcome = 'holed';
           return;
         }
