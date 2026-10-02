@@ -16,8 +16,8 @@
 const TAU = Math.PI * 2;
 const EDGE = 6; // terrain height at the edge of the course area
 const STEP = 1; // terrain grid spacing, yards
-import { paintAtlas, makeTrees, makeTreeMaterials, makeGrassGeo, makeGrassMaterial } from './flora.js?v=16';
-import { makeProps, makePropMaterial } from './props.js?v=16';
+import { paintAtlas, makeTrees, makeTreeMaterials, makeGrassGeo, makeGrassMaterial } from './flora.js?v=17';
+import { makeProps, makePropMaterial } from './props.js?v=17';
 const VERSIONED = new URL(import.meta.url).search; // same ?v= as this file
 
 // Colours and light for each course (sRGB hex).
@@ -30,7 +30,7 @@ const LOOKS = {
   },
   augusta: {
     skyTop: '#2f84df', skyHorizon: '#d6ecf8', sun: '#fff3dd', sunI: 2.7, hemiSky: '#d2e8ff', hemiGround: '#4c7a37', hemiI: 1.25, exposure: 1.0,
-    ob: '#3f8a3a', deep: '#4c9a40', rough: '#5aa847', fairway: '#7ccb58', fairway2: '#6dbd4f', fringe: '#79c656', green: '#93dd69', green2: '#85d25e',
+    ob: '#3b8238', deep: '#43893a', rough: '#4f9c40', fairway: '#62bb4c', fairway2: '#58ae45', fringe: '#5fb449', green: '#76ca5a', green2: '#6cbf52',
     sand: '#fbf6ea', sandLip: '#d2c8b0', bed: '#2a5f63', water: '#2a9fb8', deepWater: '#176a86', tree: ['#2e7a3c', '#3c8f46', '#256a36'], trunk: '#8a5a3a',
     hills: ['#3f8a45', '#56a04f', '#357a40'], sunEl: 0.9, cloud: 0.8, fogNear: 260, fogFar: 1700, hillsH: 1.2, straw: '#8e5c34', flowers: true, aug: true, env: 'park',
   },
@@ -616,7 +616,10 @@ export class View3D {
     this.barkLMat.onBeforeCompile = this.barkMat.onBeforeCompile;
     this.barkLMat.customProgramCacheKey = this.barkMat.customProgramCacheKey;
     // Swap in the painted foliage atlas and bark when they arrive.
-    const tl = new T.TextureLoader();
+    const tl0 = new T.TextureLoader(), waits = [];
+    // Each load resolves (loaded or not) so distant-tree impostors can be
+    // baked once the real textures are in.
+    const tl = { load: (url, cb) => waits.push(new Promise((ok) => tl0.load(url, (t) => { cb(t); ok(); }, undefined, ok))) };
     tl.load(new URL('../assets/tex/foliage.png', import.meta.url).href + VERSIONED, (t) => {
       t.colorSpace = T.SRGBColorSpace;
       t.anisotropy = 4;
@@ -645,6 +648,7 @@ export class View3D {
       this.barkMat.color.setScalar(1.35);
       this.barkMat.needsUpdate = true;
     });
+    this.treeTexReady = Promise.all(waits);
     this.grassU = {
       uTime: this.timeU, uMask: { value: null }, uHeight: { value: null }, uTurf: { value: null },
       uBox: { value: new T.Vector4() }, uGrid: { value: new T.Vector4() }, uCentre: { value: new T.Vector2() },
@@ -896,7 +900,7 @@ export class View3D {
         const t = Math.min(1, Math.max(0, -d) / 2.6);
         const bowl = -0.75 * t * t * (3 - 2 * t);
         const lip = d > 0 ? 0.16 * (1 - d / 2) : 0.16 * Math.max(0, 1 + d / 0.35);
-        H[k] = H[k] * (d > 0 ? 1 : 0.3) + bowl + lip;
+        H[k] += bowl + lip; // relative to the lie of the land around it
       }
     }
     // The green's real contours (the same ones the putts roll on), a touch
@@ -1434,11 +1438,21 @@ export class View3D {
         group.add(im);
         return im;
       };
+      const barkM = kind.startsWith('loblolly') ? this.barkLMat : this.barkMat;
       const live = {
-        trunk: mk(g.trunk, kind.startsWith('loblolly') ? this.barkLMat : this.barkMat), near: mk(g.nearBody, this.bodyMat),
+        trunk: mk(g.trunk, barkM), near: mk(g.nearBody, this.bodyMat),
         cards: g.nearCards ? mk(g.nearCards, g.cardsMat === 'bloom' ? this.bloomMat : this.leafMat) : null,
         far: mk(g.far, g.farCards ? this.leafMat : this.bodyMat), items: [],
       };
+      if (g.aspect) {
+        // Augusta's woods run to a thousand trees a hole: mid-distance trees
+        // get a plain trunk, and the furthest a baked billboard.
+        const lod = this.treeLod(kind, g);
+        live.trunkFar = mk(lod.trunkFar, barkM);
+        live.imp = mk(lod.quads, lod.mat);
+        live.imp.castShadow = true;
+        live.impBake = { kind, g, barkM };
+      }
       for (const t of list) {
         const h = t.h * (kind.startsWith('oak') ? 1.05 : 1);
         // Models built at true proportions say how wide they want to be.
@@ -1450,16 +1464,20 @@ export class View3D {
         m.compose(p, q, s);
         const leaf = col.set(L.tree[Math.floor(r() * L.tree.length)]).multiplyScalar(0.88 + r() * 0.24);
         const bark = kind.startsWith('loblolly') ? [0.95, 0.92, 0.9] : [trunkCol.r, trunkCol.g, trunkCol.b];
-        live.items.push({ x: t.x, y: t.y, w: width, m: m.toArray(), leaf: [leaf.r, leaf.g, leaf.b], bark });
+        // Billboards are baked with the course's mean leaf colour.
+        const mean = this.meanLeaf(L);
+        const imp = [leaf.r / mean.r, leaf.g / mean.g, leaf.b / mean.b];
+        live.items.push({ x: t.x, y: t.y, w: width, m: m.toArray(), leaf: [leaf.r, leaf.g, leaf.b], bark, imp });
       }
       this.treeKindsLive.push(live);
     }
     this.treeEye = null;
+    this.bakeImpostors(L);
 
     // Azalea beds at Augusta, gorse at St Andrews.
     const bushes = [];
     for (const f of hole.flowers || []) {
-      const n = Math.round(f.rx * f.ry * 0.9);
+      const n = Math.round(f.rx * f.ry * (L.aug ? 0.5 : 0.9));
       for (let i = 0; i < n; i++) {
         const a = r() * TAU, d = Math.sqrt(r());
         const u = Math.cos(a) * f.rx * d, v = Math.sin(a) * f.ry * d, rot = f.rot || 0;
@@ -1473,7 +1491,7 @@ export class View3D {
       for (const f of hole.species || []) {
         if (f.kind !== 'azalea') continue;
         const main = AZ[Math.floor(r() * AZ.length)];
-        const n = Math.max(f.n || 0, Math.round(f.rx * f.ry * 0.5));
+        const n = Math.min(Math.round(f.rx * f.ry * 0.3), Math.max(f.n || 0, Math.round(f.rx * f.ry * 0.15)));
         for (let i = 0; i < n; i++) {
           const a = r() * TAU, d = Math.sqrt(r());
           const u = Math.cos(a) * f.rx * d, v = Math.sin(a) * f.ry * d, rot = f.rot || 0;
@@ -1541,6 +1559,104 @@ export class View3D {
       });
       group.add(body, cards);
     }
+  }
+
+  meanLeaf(L) {
+    const c = new this.T.Color(0, 0, 0), t = new this.T.Color();
+    for (const h of L.tree) c.add(t.set(h));
+    return c.multiplyScalar(1 / L.tree.length);
+  }
+
+  // Cheap stand-ins for a tree kind: a plain tapered trunk and two crossed
+  // quads for a billboard (the quads' texture is baked per hole).
+  treeLod(kind, g) {
+    this.lodCache = this.lodCache || {};
+    if (this.lodCache[kind]) return this.lodCache[kind];
+    const T = this.T;
+    // Trunk radius at the base, and the crown's reach, from the real models.
+    const tp = g.trunk.attributes.position.array;
+    let r0 = 0.01;
+    for (let i = 0; i < tp.length; i += 3) if (tp[i + 2] < 0.03) r0 = Math.max(r0, Math.hypot(tp[i], tp[i + 1]));
+    let R = 0.05, top = 0.5;
+    for (const geo of [g.far, g.trunk]) {
+      const a = geo.attributes.position.array;
+      for (let i = 0; i < a.length; i += 3) { R = Math.max(R, Math.abs(a[i]), Math.abs(a[i + 1])); top = Math.max(top, a[i + 2]); }
+    }
+    const tH = kind.startsWith('loblolly') ? 0.78 : 0.45;
+    const trunkFar = new T.CylinderGeometry(r0 * 0.45, r0, tH, 6, 1, true).rotateX(Math.PI / 2).translate(0, 0, tH / 2);
+    const quads = new T.BufferGeometry();
+    const P = [], U = [], N = [];
+    for (const [ax, ay] of [[1, 0], [0, 1]]) {
+      const c = [[-R, 0], [R, 0], [R, top], [-R, top]];
+      const pts = c.map(([u, z]) => [ax * u, ay * u, z]);
+      for (const k of [0, 1, 2, 0, 2, 3]) {
+        P.push(...pts[k]);
+        U.push((c[k][0] + R) / (2 * R), c[k][1] / top);
+        N.push(0, 0, 1); // lit from above; the bake carries the shading
+      }
+    }
+    quads.setAttribute('position', new T.Float32BufferAttribute(P, 3));
+    quads.setAttribute('uv', new T.Float32BufferAttribute(U, 2));
+    quads.setAttribute('normal', new T.Float32BufferAttribute(N, 3));
+    const mat = new T.MeshBasicMaterial({ alphaTest: 0.5, side: T.DoubleSide, visible: false });
+    return (this.lodCache[kind] = { trunkFar, quads, mat, R, top });
+  }
+
+  // Render each Augusta tree kind once, side on, under this hole's light,
+  // into the texture its distant billboards use.
+  bakeImpostors(L) {
+    const T = this.T, holeGroup = this.holeGroup;
+    const jobs = (this.treeKindsLive || []).filter((k) => k.impBake);
+    if (!jobs.length) return;
+    this.treeTexReady.then(() => {
+      if (this.holeGroup !== holeGroup) return; // moved on to another hole
+      const scene = new T.Scene();
+      const sun = new T.DirectionalLight(this.sunLight.color, this.sunLight.intensity);
+      sun.position.copy(this.sunDir).multiplyScalar(100);
+      const hemi = this.hemi.clone();
+      const probe = new T.LightProbe(this.probe.sh.clone(), this.probe.intensity);
+      scene.add(sun, sun.target, hemi, probe);
+      const mean = this.meanLeaf(L);
+      const prevRT = this.renderer.getRenderTarget(), prevClear = this.renderer.getClearAlpha();
+      const prevCol = new T.Color();
+      this.renderer.getClearColor(prevCol);
+      for (const k of jobs) {
+        const { kind, g, barkM } = k.impBake, lod = this.treeLod(kind, g);
+        const h = 26, w = h / g.aspect;
+        const rt = new T.WebGLRenderTarget(256, 512, { type: T.HalfFloatType, samples: 4 });
+        rt.texture.generateMipmaps = true;
+        rt.texture.minFilter = T.LinearMipmapLinearFilter;
+        const parts = [[g.trunk, barkM, [0.95, 0.92, 0.9]], [g.far, g.farCards ? this.leafMat : this.bodyMat, [mean.r, mean.g, mean.b]]];
+        const meshes = parts.map(([geo, mt, c]) => {
+          const im = new T.InstancedMesh(geo, mt, 1);
+          im.setMatrixAt(0, new T.Matrix4().makeScale(w, w, h));
+          im.setColorAt(0, new T.Color(c[0], c[1], c[2]));
+          im.frustumCulled = false;
+          scene.add(im);
+          return im;
+        });
+        const cam = new T.OrthographicCamera(-lod.R * w, lod.R * w, lod.top * h, 0, 1, 400);
+        cam.up.set(0, 0, 1);
+        cam.position.set(0, 200, 0);
+        cam.lookAt(0, 0, 0);
+        this.renderer.setRenderTarget(rt);
+        this.renderer.setClearColor(0x000000, 0);
+        this.renderer.clear();
+        this.renderer.render(scene, cam);
+        for (const im of meshes) { scene.remove(im); im.dispose(); }
+        // A fresh material per hole, so the next hole's bake can't reuse it.
+        const mat = lod.mat.clone();
+        mat.map = rt.texture;
+        mat.visible = true;
+        k.imp.material = mat;
+        this.holeTextures.push(rt);
+        k.imp.userData.ownMat = true;
+      }
+      this.renderer.setRenderTarget(prevRT);
+      this.renderer.setClearColor(prevCol, prevClear);
+      this.treeEye = null;
+      this.shadowKey = '';
+    });
   }
 
   // Patrons behind the ropes, the clubhouse, scoreboards, TV towers and the
@@ -1848,9 +1964,30 @@ export class View3D {
       const NC = k.near.instanceColor.array, FC = k.far.instanceColor.array;
       const TA = k.trunk && k.trunk.instanceMatrix.array, TC = k.trunk && k.trunk.instanceColor.array;
       const nd = k.bushes ? nearD * 0.6 : nearD;
+      const midD = [110, 150, 200][this.quality];
+      let tf = 0, im = 0;
+      const imp = k.imp && k.imp.material.visible ? k.imp : null;
+      let idx = 0;
       for (const t of k.items) {
+        idx++;
         const d = Math.hypot(t.x - eye.x, t.y - eye.y);
         if (d < t.w * 0.5 + 2.5 && !k.bushes) continue;
+        if (k.bushes && d > 140 && idx & 1) continue; // distant azalea banks overlap anyway
+        if (k.trunkFar && d >= nd) {
+          if (imp && d >= midD) {
+            imp.instanceMatrix.array.set(t.m, im * 16);
+            imp.instanceColor.array.set(t.imp, im * 3);
+            im++;
+          } else {
+            k.trunkFar.instanceMatrix.array.set(t.m, tf * 16);
+            k.trunkFar.instanceColor.array.set(t.bark, tf * 3);
+            tf++;
+            FA.set(t.m, f * 16);
+            FC.set(t.leaf, f * 3);
+            f++;
+          }
+          continue;
+        }
         if (TA) {
           TA.set(t.m, a * 16);
           TC.set(t.bark, a * 3);
@@ -1867,6 +2004,8 @@ export class View3D {
         }
       }
       if (k.trunk) k.trunk.count = a;
+      if (k.trunkFar) k.trunkFar.count = tf;
+      if (k.imp) k.imp.count = im;
       k.near.count = n;
       k.far.count = f;
       if (k.cards) {
@@ -1875,9 +2014,9 @@ export class View3D {
         k.cards.instanceColor.array.set(NC.subarray(0, n * 3));
         k.cards.count = n;
       }
-      for (const im of [k.trunk, k.near, k.far, k.cards].filter(Boolean)) {
-        im.instanceMatrix.needsUpdate = true;
-        im.instanceColor.needsUpdate = true;
+      for (const m of [k.trunk, k.near, k.far, k.cards, k.trunkFar, k.imp].filter(Boolean)) {
+        m.instanceMatrix.needsUpdate = true;
+        m.instanceColor.needsUpdate = true;
       }
     }
   }

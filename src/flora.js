@@ -515,31 +515,34 @@ function repaint(b, from, fn) {
 const LOB_A = 3.0;
 function loblollyPlan(seed) {
   const r = rand(seed), A = LOB_A;
-  const lean = [(r() - 0.5) * 0.04, (r() - 0.5) * 0.04];
+  const lean = [(r() - 0.5) * 0.05, (r() - 0.5) * 0.05];
   const axis = (z) => [lean[0] * (z / A) ** 2, lean[1] * (z / A) ** 2];
+  // A high, rounded-irregular crown: overlapping needle masses spread over
+  // an egg-shaped envelope (fuller low down), each on its own limb.
+  const [cx, cy] = axis(A * 0.83);
+  const C = [cx + (r() - 0.5) * 0.06, cy + (r() - 0.5) * 0.06, A * 0.81];
+  const R = [0.42, 0.42, 0.5];
   const limbs = [], clusters = [];
-  const nb = 8;
-  for (let i = 0; i < nb; i++) {
-    const t = i / (nb - 1);
-    const z = A * (0.58 + t * 0.3) + (r() - 0.5) * 0.08;
-    const a = i * 2.399 + r() * 0.8;
-    const reach = (0.3 + r() * 0.14) * (1 - t * 0.55);
-    const rise = 0.12 + r() * 0.16;
-    const [ax, ay] = axis(z);
-    const s = [ax, ay, z];
-    const e = [ax + Math.cos(a) * reach, ay + Math.sin(a) * reach, z + rise];
-    const m = [ax + Math.cos(a) * reach * 0.6, ay + Math.sin(a) * reach * 0.6, z + rise * 0.12];
-    limbs.push({ s, m, e, r0: 0.012 * (1 - t * 0.4) });
-    const rr = (0.15 + r() * 0.05) * (1 - t * 0.3);
-    clusters.push([rr, e[0], e[1], e[2] + rr * 0.2, 1.1, 1.1, 0.95]);
-    if (r() < 0.5 && t < 0.75) {
-      const f = 0.5;
-      clusters.push([rr * 0.7, ax + Math.cos(a + 0.35) * reach * f, ay + Math.sin(a + 0.35) * reach * f, z + rise * 0.3 + rr * 0.45, 1, 1, 0.95]);
+  const n = 11;
+  for (let i = 0; i < n; i++) {
+    const y = 0.92 - (1.7 * (i + 0.5)) / n; // top to bottom, skipping the very bottom
+    const ph = i * 2.399 + r() * 0.9;
+    const rad = Math.sqrt(1 - y * y);
+    const f = 0.72 + r() * 0.3;
+    const low = clamp01(-y);
+    const c = [C[0] + Math.cos(ph) * rad * R[0] * f * (1 + low * 0.25), C[1] + Math.sin(ph) * rad * R[1] * f * (1 + low * 0.25), C[2] + y * R[2] * f];
+    const rr = (0.135 + r() * 0.06) * (1 + low * 0.2);
+    clusters.push([rr, c[0], c[1], c[2], 1.08 + low * 0.1, 1.08 + low * 0.1, 0.82 - low * 0.08]);
+    const d = Math.hypot(c[0] - C[0], c[1] - C[1]);
+    if (d > 0.08) {
+      const zs = Math.max(A * 0.6, c[2] - 0.22 - r() * 0.2);
+      const [ax, ay] = axis(zs);
+      const e = [c[0] * 0.8 + ax * 0.2, c[1] * 0.8 + ay * 0.2, c[2] - rr * 0.3];
+      limbs.push({ s: [ax, ay, zs], m: [ax + (e[0] - ax) * 0.55, ay + (e[1] - ay) * 0.55, zs + (e[2] - zs) * 0.2], e, r0: 0.011 });
     }
   }
-  const [tx, ty] = axis(A * 0.95);
-  clusters.push([0.14, tx, ty, A * 0.93, 1.05, 1.05, 0.95]);
-  clusters.push([0.12, tx + 0.12, ty - 0.06, A * 0.86, 1.1, 1.1, 0.85]);
+  // A small leader tuft on top.
+  clusters.push([0.11, C[0] + 0.02, C[1], C[2] + R[2] * 0.95, 1, 1, 0.95]);
   return { A, axis, limbs, clusters, seed };
 }
 
@@ -574,7 +577,7 @@ function loblollyTrunk(T, plan) {
 
 // Bristly needle tufts (blossoms.png slot 2, base at the bottom) standing
 // out of the clumps' surface, tips outward and upward.
-function brushCards(b, clusters, { n, size, seed, slot = 2, up = 0.45, bright = 1.3 }) {
+function brushCards(b, clusters, { n, size, seed, slot = 2, up = 0.45, bright = 1.3, minZ = -0.5 }) {
   const r = rand(seed);
   const K = clusters.map(([rr, x, y, z, sx = 1, sy = 1, sz = 1]) => ({ rr, x, y, z, sx, sy, sz }));
   const area = K.map((k) => k.rr * k.rr * k.sx * Math.max(k.sy, k.sz));
@@ -595,7 +598,7 @@ function brushCards(b, clusters, { n, size, seed, slot = 2, up = 0.45, bright = 
     do d = [r() * 2 - 1, r() * 2 - 1, r() * 2 - 1];
     while (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 1);
     d = norm(d);
-    if (d[2] < -0.5) continue;
+    if (d[2] < minZ) continue;
     const p = [k.x + d[0] * k.rr * k.sx * 0.8, k.y + d[1] * k.rr * k.sy * 0.8, k.z + d[2] * k.rr * k.sz * 0.8];
     if (inside(p, ki)) continue;
     const sn = norm([d[0] / k.sx, d[1] / k.sy, d[2] / k.sz]);
@@ -613,19 +616,89 @@ function brushCards(b, clusters, { n, size, seed, slot = 2, up = 0.45, bright = 
 }
 
 function loblolly(T, plan, near) {
-  const { A, clusters } = plan;
-  // The solid core sits a little inside; the needle tufts make the outline.
-  const core = clusters.map(([rr, ...rest]) => [rr * (near ? 0.82 : 1), ...rest]);
+  const { A, clusters, seed } = plan;
+  const r = rand(seed + 17);
+  // The solid core sits inside; needle tufts make a fuzzy outline. The far
+  // model keeps the same masses (coarser) and its own ring of tufts, so the
+  // silhouette doesn't change between the two.
+  const core = clusters.map(([rr, ...rest]) => [rr * (near ? 0.8 : 0.78), ...rest]);
   const b = canopy(T, near
-    ? { clusters: core, detail: 1, lump: 0.38, seed: plan.seed, tint: 0.85 }
-    : { clusters: core, detail: 0, lump: 0.25, seed: plan.seed, tint: 0.85 });
-  const out = { body: squash(b.geometry(T), A) };
+    ? { clusters: core, detail: 1, lump: 0.38, seed, tint: 0.9 }
+    : { clusters: [...clusters].sort((p, q) => q[0] - p[0]).slice(0, 7).map(([rr, ...rest]) => [rr * 0.75, ...rest]), detail: 0, lump: 0.3, seed, tint: 0.8 });
+  if (!near) {
+    // Far: a small dark core per mass, wrapped in big hanging-needle tufts
+    // placed over the full-size masses, so the outline stays soft.
+    const tmp = canopy(T, { clusters, detail: 0, lump: 0.2, seed: seed + 3, tint: 1.08, cards: 130, cardSize: 0.18, slot: 1, hang: true });
+    b.cards = tmp.cards;
+  }
+  // Sunlit tops lighter and warmer, undersides darker and cooler, and each
+  // mass a little different.
+  const vary = core.map(() => 0.88 + r() * 0.24);
+  const which = (p) => {
+    let best = 0, bd = Infinity;
+    core.forEach((k, i) => {
+      const d = Math.hypot(p[0] - k[1], p[1] - k[2], p[2] - k[3]) / k[0];
+      if (d < bd) { bd = d; best = i; }
+    });
+    return best;
+  };
+  repaint(b, 0, (p, nn, c) => {
+    const v = vary[which(p)], up = nn[2];
+    const k = v * (up > 0 ? 1 + up * 0.32 : 1 + up * 0.12);
+    return [[c[0] * k * (1 + Math.max(0, up) * 0.1), c[1] * k, c[2] * k * (1 - Math.max(0, up) * 0.12)], 0];
+  });
+  const out = { body: null };
   if (near) {
+    out.body = squash(b.geometry(T), A);
     const cb = new Builder();
-    brushCards(cb, core, { n: 190, size: 0.18, seed: plan.seed + 1, bright: 1.15 });
+    brushCards(cb, core, { n: 270, size: 0.17, seed: seed + 1, bright: 1.2, up: 0.3, minZ: -0.85 });
     out.cards = squash(cb.cardGeometry(T), A);
+  } else {
+    // Far: body + hanging-needle tufts (foliage slot 1) in one geometry, to
+    // be drawn with the leaf material (farCards).
+    out.body = squash(T.mergeGeometries([b.geometry(T), b.cardGeometry(T)]), A);
   }
   return out;
+}
+
+// Needle tufts from foliage slot 1 (fixed along the image's top edge),
+// rooted on the clumps' surface and splaying outward and up: a fuzzy rim.
+function tuftCards(b, clusters, { n, size, seed }) {
+  const r = rand(seed);
+  const K = clusters.map(([rr, x, y, z, sx = 1, sy = 1, sz = 1]) => ({ rr, x, y, z, sx, sy, sz }));
+  const total = K.reduce((a, k) => a + k.rr * k.rr, 0);
+  let zMin = Infinity, zMax = -Infinity;
+  for (const k of K) {
+    zMin = Math.min(zMin, k.z - k.rr * k.sz);
+    zMax = Math.max(zMax, k.z + k.rr * k.sz);
+  }
+  const inside = (p, skip) =>
+    K.some((k, i) => i !== skip && ((p[0] - k.x) / (k.rr * k.sx)) ** 2 + ((p[1] - k.y) / (k.rr * k.sy)) ** 2 + ((p[2] - k.z) / (k.rr * k.sz)) ** 2 < 0.85);
+  let made = 0;
+  for (let tries = 0; made < n && tries < n * 40; tries++) {
+    let pick = r() * total, ki = 0;
+    while (pick > K[ki].rr ** 2 && ki < K.length - 1) {
+      pick -= K[ki].rr ** 2;
+      ki++;
+    }
+    const k = K[ki];
+    let d;
+    do d = [r() * 2 - 1, r() * 2 - 1, r() * 2 - 1];
+    while (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 1);
+    d = norm(d);
+    if (d[2] < -0.6) continue;
+    const p = [k.x + d[0] * k.rr * k.sx * 0.85, k.y + d[1] * k.rr * k.sy * 0.85, k.z + d[2] * k.rr * k.sz * 0.85];
+    if (inside(p, ki)) continue;
+    const sn = norm([d[0] / k.sx, d[1] / k.sy, d[2] / k.sz]);
+    const o = norm([sn[0] + (r() - 0.5) * 0.5, sn[1] + (r() - 0.5) * 0.5, sn[2] * 0.6 + 0.25 + (r() - 0.5) * 0.4]);
+    const rnd = norm([r() - 0.5, r() - 0.5, r() - 0.5]);
+    const t1 = norm(cross(o, Math.abs(rnd[0] * o[0] + rnd[1] * o[1] + rnd[2] * o[2]) > 0.9 ? [0, 0, 1] : rnd));
+    const h = clamp01((p[2] - zMin) / (zMax - zMin));
+    const l = (0.5 + 0.45 * h + 0.15 * Math.max(0, sn[2])) * (0.9 + r() * 0.2);
+    const s = size * (0.8 + r() * 0.4);
+    b.quad([p[0] - o[0] * s * 0.15, p[1] - o[1] * s * 0.15, p[2] - o[2] * s * 0.15], t1, o, s, sn, [l, l * 1.02, l * 0.9], 1, true);
+    made++;
+  }
 }
 
 // Flowering dogwood: low trunk forking into spreading limbs, layered flat
@@ -640,7 +713,7 @@ function dogwoodPlan(seed) {
       const a = (i / n) * TAU + ti * 0.8 + r() * 0.5;
       const d = rad * (0.85 + r() * 0.3);
       const c = [Math.cos(a) * d, Math.sin(a) * d, z + (r() - 0.5) * 0.04];
-      clusters.push([rr * (0.9 + r() * 0.2), c[0], c[1], c[2], 1.25, 1.25, 0.32]);
+      clusters.push([rr * (1 + r() * 0.25), c[0], c[1], c[2] + (r() - 0.5) * 0.05, 1.15, 1.15, 0.55]);
       if (n > 1) limbs.push({ s: [0, 0, 0.16 + ti * 0.05], m: [c[0] * 0.4, c[1] * 0.4, c[2] - 0.08], e: [c[0] * 0.95, c[1] * 0.95, c[2] - 0.02], r0: 0.016 - ti * 0.003 });
     }
   });
@@ -661,19 +734,21 @@ function dogwoodTrunk(T, plan) {
 function dogwood(T, plan, near) {
   const { A, clusters, seed } = plan;
   const n3 = noise3(seed + 5);
-  const core = clusters.map(([rr, ...rest]) => [rr * (near ? 0.8 : 1), ...rest]);
-  const b = canopy(T, { clusters: core, detail: near ? 1 : 0, lump: 0.35, seed, tint: 1.1 });
+  // Far: five sprays spanning the tiers, smooth (domes read better than facets).
+  const core = near ? clusters.map(([rr, ...rest]) => [rr * 0.8, ...rest])
+    : [0, 2, 5, 8, 11].map((i) => clusters[i]).map(([rr, x, y, z, sx, sy, sz]) => [rr * 1.3, x, y, z, sx * 1.1, sy * 1.1, sz]);
+  const b = canopy(T, { clusters: core, detail: 1, lump: near ? 0.35 : 0.22, seed, tint: 1.25 });
   // Bracts: white patches over the top of each layer (most of it far away).
   repaint(b, 0, (p, n, c) => {
     const w = n3(p[0] * 9, p[1] * 9, p[2] * 9) + n[2] * 0.35;
-    if (w < (near ? 0.75 : 0.55)) return [[c[0] * 1.05, c[1] * 1.1, c[2] * 0.8], 0];
+    if (w < (near ? 0.62 : 0.5)) return [[c[0] * 1.15, c[1] * 1.15, c[2] * 0.75], 0];
     const l = 0.75 + 0.3 * Math.max(0, n[2]);
     return [[l, l, l * 0.97], 2];
   });
   const out = { body: squash(b.geometry(T), A) };
   if (near) {
     const cb = new Builder();
-    scatterCards(cb, clusters, { n: 150, size: 0.12, slot: 0, up: 0.7, seed: seed + 9, col: (p, d) => { const l = 0.85 + 0.2 * d[2]; return [l, l, l]; } });
+    scatterCards(cb, clusters, { n: 150, size: 0.12, slot: 0, up: 0.45, minZ: -0.25, seed: seed + 9, col: (p, d) => { const l = 0.85 + 0.2 * d[2]; return [l, l, l]; } });
     FLAG(cb.cards, 2);
     out.cards = squash(cb.cardGeometry(T), A);
   }
@@ -774,9 +849,9 @@ function azalea(T, seed = 51) {
 export function makeAugustaTrees(T) {
   const kinds = {};
   const lp = loblollyPlan(101), ln = loblolly(T, lp, true), lf = loblolly(T, lp, false);
-  kinds.loblolly = { nearBody: ln.body, nearCards: ln.cards, cardsMat: 'bloom', far: lf.body, trunk: loblollyTrunk(T, lp), aspect: LOB_A };
+  kinds.loblolly = { nearBody: ln.body, nearCards: ln.cards, cardsMat: 'bloom', far: lf.body, farCards: true, trunk: loblollyTrunk(T, lp), aspect: LOB_A };
   const lp2 = loblollyPlan(202), ln2 = loblolly(T, lp2, true), lf2 = loblolly(T, lp2, false);
-  kinds.loblolly2 = { nearBody: ln2.body, nearCards: ln2.cards, cardsMat: 'bloom', far: lf2.body, trunk: loblollyTrunk(T, lp2), aspect: LOB_A };
+  kinds.loblolly2 = { nearBody: ln2.body, nearCards: ln2.cards, cardsMat: 'bloom', far: lf2.body, farCards: true, trunk: loblollyTrunk(T, lp2), aspect: LOB_A };
   const dp = dogwoodPlan(61), dn = dogwood(T, dp, true), df = dogwood(T, dp, false);
   kinds.dogwood = { nearBody: dn.body, nearCards: dn.cards, cardsMat: 'bloom', far: df.body, trunk: dogwoodTrunk(T, dp), aspect: DOG_A };
   const mp = magnoliaPlan(71), mn = magnolia(T, mp, true), mf = magnolia(T, mp, false);
