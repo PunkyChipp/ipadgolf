@@ -1,6 +1,6 @@
 // Shot simulation. Pure and deterministic: the same inputs and seed always
 // give the same result, so two iPads can replay each other's shots exactly.
-import { T, TERRAIN_NAMES, rng, hashSeed } from './course.js?v=18';
+import { T, TERRAIN_NAMES, rng, hashSeed } from './course.js?v=19';
 
 export const G = 10.72; // gravity, yards/s²
 export const CUP_R = 0.075; // a little larger than a real cup (0.059 yd)
@@ -23,6 +23,12 @@ function sink(hole, frames, x, y, vx = 0, vy = 0) {
   }
 }
 export const FPS = 60;
+
+// Fun mode: silly, overpowered physics (some of them old bugs brought back
+// on purpose). Set for the length of one simulateShot call from input.fun,
+// so every device replays a player's shots the way they were hit.
+let FUN = false;
+const funEvent = (res, label, f) => res.events.push({ type: 'fun', label, f: Math.max(0, f) });
 
 // carry/roll in yards on a flat fairway with no wind; up = time for the swing
 // meter to reach 100% (smaller is faster and harder); win = accuracy window scale.
@@ -124,6 +130,14 @@ const RELEASE = { [T.TEE]: 1, [T.FAIRWAY]: 1, [T.FRINGE]: 0.7, [T.GREEN]: 0.55, 
 
 // Some courses (Augusta) have faster greens than others.
 function decelAt(hole, ter) {
+  // Fun: off the greens everything rolls three times faster for the same
+  // distance, so a 400 yd rocket roll doesn't take half a minute to watch.
+  // The rough doesn't grab the ball either; only sand stops it.
+  if (FUN && ter !== T.GREEN) return baseDecel(hole, ter === T.SAND ? T.SAND : T.FAIRWAY) * 3;
+  return baseDecel(hole, ter);
+}
+
+function baseDecel(hole, ter) {
   if (ter === T.GREEN && hole.greenDecel) return hole.greenDecel;
   // Firm links turf lets the ball run much further.
   if (hole.firm > 1 && (ter === T.FAIRWAY || ter === T.FRINGE || ter === T.TEE)) return DECEL[ter] / hole.firm;
@@ -254,6 +268,15 @@ const dirOf = (a) => [Math.cos(a), Math.sin(a)];
 // Main entry: returns animation frames plus the outcome.
 // ball: { x, y, lie }; input: { club, aim, power, acc, puttScale }; wind: { speed, dir }
 export function simulateShot(hole, ball, input, wind, seed) {
+  FUN = !!input.fun;
+  try {
+    return simulate(hole, ball, input, wind, seed);
+  } finally {
+    FUN = false;
+  }
+}
+
+function simulate(hole, ball, input, wind, seed) {
   const r = rng(seed);
   const club = CLUBS[input.club];
   const frames = [];
@@ -304,7 +327,9 @@ export function simulateShot(hole, ball, input, wind, seed) {
     res.landedOn = land;
     if (land === T.WATER) return water(hole, ball, res, last);
     if (land === T.OB) return ob(ball, res);
-    const v = 1 + r() * 2;
+    // Fun: the trees fire it back out like a pinball bumper.
+    const v = FUN ? 14 + r() * 16 : 1 + r() * 2;
+    if (FUN) funEvent(res, 'Pinball!', frames.length - 1);
     roll(hole, last.x, last.y, Math.cos(a) * v, Math.sin(a) * v, frames, res, 0);
     return finish(hole, ball, res);
   }
@@ -344,10 +369,28 @@ export function simulateShot(hole, ball, input, wind, seed) {
   rollDist *= fp.g.roll;
   // Topspin releases the ball; backspin grips, and a wedge can zip it backwards.
   rollDist *= 1 + 1.2 * fp.top;
+  if (FUN) {
+    // Rocket roll: the softer you hit it with topspin, the further it goes.
+    const rocket = fp.top * 260 * Math.pow(Math.max(0, 1 - Math.min(1, p)), 1.3);
+    rollDist += rocket;
+    if (rocket > 25) funEvent(res, 'Rocket roll!', frames.length + 20);
+    // Topped shots skitter on forever.
+    if (fp.strike.kind === 'top') {
+      rollDist = rollDist * 3 + 70;
+      funEvent(res, 'Skimmer!', frames.length + 20);
+    }
+  }
   const bite = (club.wedge ? 1 : club.carry > 200 ? 0.25 : 0.6) * (SPIN_GRIP[land] ?? 0) * Math.min(1, 0.35 + p) * fp.strike.bite * fp.g.bite * (fp.shape.bite || 1);
-  rollDist -= fp.back * bite * 8;
-  // Side spin kicks the ball sideways as it lands.
-  const kick = fp.spin.x * 0.06;
+  const zip = fp.back * bite * 8 * (FUN ? 8 : 1);
+  rollDist -= zip;
+  if (FUN && zip > 12) funEvent(res, 'Super zip!', frames.length + 40);
+  // Side spin kicks the ball sideways as it lands (hard, in fun mode).
+  const kick = fp.spin.x * (FUN ? 1.1 : 0.06);
+  if (FUN && Math.abs(fp.spin.x) > 0.3 && rollDist > 0) {
+    // ...and shoots off that way like it's been fired from a cannon.
+    rollDist += Math.abs(fp.spin.x) * 30;
+    funEvent(res, fp.spin.x > 0 ? 'Kicked right!' : 'Kicked left!', frames.length + 10);
+  }
   [hx, hy] = [hx * Math.cos(kick) - hy * Math.sin(kick), hx * Math.sin(kick) + hy * Math.cos(kick)];
   // How the ball arrives: steeper for high shots, flatter for drivers and
   // punches; faster for longer shots.
@@ -373,6 +416,8 @@ const BOUNCE = {
 
 function bounceOf(hole, ter) {
   const b = BOUNCE[ter] || BOUNCE[T.ROUGH];
+  // Fun: a superball, even out of the sand.
+  if (FUN) return { e: Math.min(0.8, b.e * 2 + 0.25), mu: b.mu * 0.5 };
   if (hole.firm > 1 && (ter === T.FAIRWAY || ter === T.FRINGE)) return { e: b.e * 1.25, mu: b.mu * 0.7 };
   return b;
 }
@@ -442,7 +487,7 @@ function bounceAndRoll(hole, x, y, hx, hy, run, land, inV, frames, res, mishit) 
       dirx = -dirx;
       diry = -diry;
       const want = -run + vh * ((2 * vz) / G) * 0.5;
-      let lo = 0, hi = 30;
+      let lo = 0, hi = FUN ? 80 : 30;
       for (let i = 0; i < 24; i++) {
         const mid = (lo + hi) / 2;
         if (runDistance(hole, ter, mid, vz) < want) lo = mid;
@@ -493,6 +538,13 @@ function roll(hole, x, y, vx, vy, frames, res, hop) {
       // The cup: slow enough and it drops, too fast and it lips out.
       const cx = hole.pin.x - x, cy = hole.pin.y - y;
       const cd = Math.hypot(cx, cy);
+      // Fun: the old cup magnet. Anything slow and close snaps in.
+      if (FUN && cd < 0.45 && Math.hypot(vx, vy) < 2.6 && ter === T.GREEN) {
+        sink(hole, frames, x, y, vx, vy);
+        res.outcome = 'holed';
+        funEvent(res, 'Magnet!', frames.length - 1);
+        return;
+      }
       if (cd < CUP_R) {
         const s = Math.hypot(vx, vy);
         if (s < 1.35 || (cd < CUP_R * 0.5 && s < 2.1)) {
