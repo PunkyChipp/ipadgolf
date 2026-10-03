@@ -1,6 +1,6 @@
 // Shot simulation. Pure and deterministic: the same inputs and seed always
 // give the same result, so two iPads can replay each other's shots exactly.
-import { T, TERRAIN_NAMES, rng, hashSeed } from './course.js?v=17';
+import { T, TERRAIN_NAMES, rng, hashSeed } from './course.js?v=18';
 
 export const G = 10.72; // gravity, yards/s²
 export const CUP_R = 0.075; // a little larger than a real cup (0.059 yd)

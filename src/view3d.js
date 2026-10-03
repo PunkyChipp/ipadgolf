@@ -16,8 +16,8 @@
 const TAU = Math.PI * 2;
 const EDGE = 6; // terrain height at the edge of the course area
 const STEP = 1; // terrain grid spacing, yards
-import { paintAtlas, makeTrees, makeTreeMaterials, makeGrassGeo, makeGrassMaterial } from './flora.js?v=17';
-import { makeProps, makePropMaterial } from './props.js?v=17';
+import { paintAtlas, makeTrees, makeTreeMaterials, makeGrassGeo, makeGrassMaterial } from './flora.js?v=18';
+import { makeProps, makePropMaterial } from './props.js?v=18';
 const VERSIONED = new URL(import.meta.url).search; // same ?v= as this file
 
 // Colours and light for each course (sRGB hex).
@@ -547,28 +547,44 @@ export class View3D {
       ),
     )
       .then((list) => {
-        for (const [u, t] of list) this.detU[u].value = t;
+        for (const [u, t] of list) this.detBase[u] = t;
+        this.applyDetail();
         this.detU.uDetOn.value = 1;
       })
       .catch(() => {}); // keep the plain look if they can't load
-    // Extra Augusta surfaces, each optional on its own (grey until loaded).
-    // Pine straw is a colour texture; the rest are neutral detail maps.
+    // Augusta swaps its own surfaces into the same slots rather than adding
+    // samplers: iPads allow only 16 textures per shader, and the terrain is
+    // at 15. Fairway -> Augusta turf, sand -> white sand, and soil (only seen
+    // under water) -> pine straw, which is a colour texture.
     const straw = one(142, 92, 52);
     straw.colorSpace = T.SRGBColorSpace;
+    this.detBase = {};
+    this.detAug = { uDSoilA: straw, uDSoilN: flat };
+    this.detAugOn = false;
     const extra = {
-      uDStrawA: 'pinestraw', uDStrawN: 'pinestraw_n', uDWSandA: 'sand_white', uDWSandN: 'sand_white_n',
-      uDAugA: 'turf_augusta', uDAugN: 'turf_augusta_n',
+      uDSoilA: 'pinestraw', uDSoilN: 'pinestraw_n', uDSandA: 'sand_white', uDSandN: 'sand_white_n',
+      uDFairA: 'turf_augusta', uDFairN: 'turf_augusta_n',
     };
     for (const [u, f] of Object.entries(extra)) {
-      this.detU[u] = { value: u === 'uDStrawA' ? straw : f.endsWith('_n') ? flat : grey };
       load(f)
         .then((t) => {
           t.wrapS = t.wrapT = T.RepeatWrapping;
-          t.colorSpace = u === 'uDStrawA' ? T.SRGBColorSpace : T.NoColorSpace;
+          t.colorSpace = f === 'pinestraw' ? T.SRGBColorSpace : T.NoColorSpace;
           t.anisotropy = Math.min(16, aniso);
-          this.detU[u].value = t;
+          this.detAug[u] = t;
+          this.applyDetail();
         })
         .catch(() => {});
+    }
+  }
+
+  // Point the shared detail slots at this course's textures.
+  applyDetail(aug = this.detAugOn) {
+    this.detAugOn = aug;
+    for (const u of Object.keys(this.detU)) {
+      if (u === 'uDetOn') continue;
+      const t = (aug && this.detAug[u]) || this.detBase[u];
+      if (t) this.detU[u].value = t;
     }
   }
 
@@ -766,6 +782,7 @@ export class View3D {
     this.maskTex.generateMipmaps = false;
     this.maskTex.minFilter = T.LinearFilter;
     this.holeTextures.push(this.maskTex);
+    this.applyDetail(!!L.aug); // Augusta's turf, sand and straw in the shared slots
     this.buildTerrain(hole, mask, L, group);
     // Sky, clouds, distant hills.
     this.buildSky(L, group, hole);
@@ -1013,7 +1030,6 @@ export class View3D {
         uniform sampler2D uSdf, uAlong;
         uniform vec4 uBox, uTee; uniform vec2 uTeeR, uFw; uniform vec3 uGreen;
         uniform vec3 cFair, cFair2, cFringe, cGreen, cGreen2, cSand, cLip, cBed, cRock, cStraw; uniform float uSea, uAug;
-        uniform sampler2D uDStrawA, uDStrawN, uDWSandA, uDWSandN, uDAugA, uDAugN;
         uniform sampler2D uDFairA, uDFairN, uDGreenA, uDGreenN, uDRoughA, uDRoughN, uDSandA, uDSandN, uDSoilA, uDSoilN, uDMacro;
         uniform float uDetOn;
         float inside(float d) { float w = max(fwidth(d) * 0.75, 0.003); return 1.0 - smoothstep(-w, w, d); }
@@ -1097,7 +1113,7 @@ export class View3D {
           // Needles keep the painted shade under the trees.
           if (wStraw > 0.002) {
             float sh = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11)) / max(dot(cStraw, vec3(0.3, 0.59, 0.11)), 0.01);
-            vec3 sa = det(uDStrawA, vWP.xy, 2.5, smoothstep(0.42, 0.58, texture2D(uDMacro, vWP.xy / 23.0 + 0.5).r)).rgb;
+            vec3 sa = det(uDSoilA, vWP.xy, 2.5, smoothstep(0.42, 0.58, texture2D(uDMacro, vWP.xy / 23.0 + 0.5).r)).rgb;
             sa = mix(sa, vec3(dot(sa, vec3(0.3, 0.59, 0.11))), 0.25) * vec3(0.82, 0.8, 0.82);
             col = mix(col, sa * clamp(sh, 0.3, 1.1), wStraw);
           }
@@ -1116,17 +1132,20 @@ export class View3D {
             if (nearN) dN = vec4(0.0);
             float wf = wFair + max(wFringe, 0.0);
             if (wf > 0.002) {
-              if (uAug > 0.5) { dA += wf * det(uDAugA, vWP.xy, 1.0, sel); if (nearN) dN += wf * det(uDAugN, vWP.xy, 1.0, sel); }
-              else { dA += wf * det(uDFairA, vWP.xy, 1.1, sel); if (nearN) dN += wf * det(uDFairN, vWP.xy, 1.1, sel); }
+              dA += wf * det(uDFairA, vWP.xy, 1.1, sel); if (nearN) dN += wf * det(uDFairN, vWP.xy, 1.1, sel);
             }
             if (wGreen > 0.002) { dA += wGreen * det(uDGreenA, vWP.xy, 0.9, sel); if (nearN) dN += wGreen * det(uDGreenN, vWP.xy, 0.9, sel); }
             if (wRough > 0.002) { dA += wRough * det(uDRoughA, vWP.xy, 1.8, sel); if (nearN) dN += wRough * det(uDRoughN, vWP.xy, 1.8, sel); }
             if (wSand > 0.002) {
-              if (uAug > 0.5) { dA += wSand * det(uDWSandA, vWP.xy, 1.6, sel); if (nearN) dN += wSand * det(uDWSandN, vWP.xy, 1.6, sel); }
-              else { dA += wSand * det(uDSandA, vWP.xy, 2.0, sel); if (nearN) dN += wSand * det(uDSandN, vWP.xy, 2.0, sel); }
+              float ss = uAug > 0.5 ? 1.6 : 2.0;
+              dA += wSand * det(uDSandA, vWP.xy, ss, sel); if (nearN) dN += wSand * det(uDSandN, vWP.xy, ss, sel);
             }
-            if (wStraw > 0.002) { dA += wStraw * vec4(0.5); if (nearN) dN += wStraw * det(uDStrawN, vWP.xy, 2.5, sel); }
-            if (wBed > 0.002) { dA += wBed * det(uDSoilA, vWP.xy, 3.0, sel); if (nearN) dN += wBed * det(uDSoilN, vWP.xy, 3.0, sel); }
+            if (wStraw > 0.002) { dA += wStraw * vec4(0.5); if (nearN) dN += wStraw * det(uDSoilN, vWP.xy, 2.5, sel); }
+            // At Augusta the soil slot holds pine straw, so lake beds go plain.
+            if (wBed > 0.002) {
+              if (uAug > 0.5) { dA += wBed * vec4(0.5); if (nearN) dN += wBed * vec4(0.5, 0.5, 1.0, 1.0); }
+              else { dA += wBed * det(uDSoilA, vWP.xy, 3.0, sel); if (nearN) dN += wBed * det(uDSoilN, vWP.xy, 3.0, sel); }
+            }
           }
           // A coarser pass of the same grass so the mid-distance isn't flat.
           if (uDetOn > 0.5 && dCam > 4.0 && dCam < 160.0) {
