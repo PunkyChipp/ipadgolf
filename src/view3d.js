@@ -16,8 +16,8 @@
 const TAU = Math.PI * 2;
 const EDGE = 6; // terrain height at the edge of the course area
 const STEP = 1; // terrain grid spacing, yards
-import { paintAtlas, makeTrees, makeTreeMaterials, makeGrassGeo, makeGrassMaterial } from './flora.js?v=18';
-import { makeProps, makePropMaterial } from './props.js?v=18';
+import { paintAtlas, makeTrees, makeTreeMaterials, makeGrassGeo, makeGrassMaterial } from './flora.js?v=20';
+import { makeProps, makePropMaterial } from './props.js?v=20';
 const VERSIONED = new URL(import.meta.url).search; // same ?v= as this file
 
 // Colours and light for each course (sRGB hex).
@@ -883,6 +883,35 @@ export class View3D {
         }
       }
       blur(E, Math.round(3 / step));
+      // Ponds lie flat: level the land under each one (and its banks) to the
+      // pond's average height, so the water sits in a basin, not on a slope.
+      for (const wt of hole.water) {
+        if (wt.line) continue; // creeks run downhill with the land
+        const c = Math.cos(-(wt.rot || 0)), sn = Math.sin(-(wt.rot || 0)), grow = 8;
+        const at = (x, y, g) => {
+          const dx = x - wt.x, dy = y - wt.y;
+          const u = (dx * c - dy * sn) / (wt.rx + g), v = (dx * sn + dy * c) / (wt.ry + g);
+          return u * u + v * v;
+        };
+        const i0 = Math.max(0, Math.floor((wt.x - wt.rx - wt.ry - grow - box.x) / step)), i1 = Math.min(gw - 1, Math.ceil((wt.x + wt.rx + wt.ry + grow - box.x) / step));
+        const j0 = Math.max(0, Math.floor((wt.y - wt.rx - wt.ry - grow - box.y) / step)), j1 = Math.min(gh - 1, Math.ceil((wt.y + wt.rx + wt.ry + grow - box.y) / step));
+        let sum = 0, n = 0;
+        for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) if (at(box.x + i * step, box.y + j * step, 0) <= 1) { sum += E[j * gw + i]; n++; }
+        if (!n) continue;
+        const level = sum / n;
+        for (let j = j0; j <= j1; j++) {
+          for (let i = i0; i <= i1; i++) {
+            const x = box.x + i * step, y = box.y + j * step;
+            if (at(x, y, 0) <= 1) { E[j * gw + i] = level; continue; }
+            // Ease back into the slope over the banks.
+            const q = Math.sqrt(at(x, y, grow));
+            if (q >= 1) continue;
+            const r0 = Math.sqrt(at(x, y, 0)), t = Math.min(1, (r0 - 1) / Math.max(1e-3, r0 / q - 1)) || 0;
+            const w = 1 - t * t * (3 - 2 * t);
+            E[j * gw + i] += (level - E[j * gw + i]) * w;
+          }
+        }
+      }
       for (let k = 0; k < N; k++) eMean += E[k];
       eMean /= N;
     }
@@ -950,7 +979,7 @@ export class View3D {
         }
       }
     }
-    this.grid = { H, gw, gh, step, x: box.x, y: box.y };
+    this.grid = { H, E, gw, gh, step, x: box.x, y: box.y };
 
     const pos = new Float32Array(N * 3), uv = new Float32Array(N * 2);
     for (let j = 0; j < gh; j++) {
@@ -1398,7 +1427,23 @@ export class View3D {
     }
     x0 = Math.max(x0, box.x); y0 = Math.max(y0, box.y);
     x1 = Math.min(x1, box.x + box.w); y1 = Math.min(y1, box.y + box.h);
-    const geo = new T.PlaneGeometry(x1 - x0, y1 - y0);
+    // The surface follows the lie of the land: flat on the (levelled) ponds,
+    // stepping down with the creeks, always just below the banks.
+    const g = this.grid, E = g.E;
+    const segX = Math.min(240, Math.max(1, Math.ceil((x1 - x0) / 2))), segY = Math.min(240, Math.max(1, Math.ceil((y1 - y0) / 2)));
+    const geo = new T.PlaneGeometry(x1 - x0, y1 - y0, segX, segY);
+    let zMid = 0;
+    if (E) {
+      const eAt = (x, y) => {
+        const fx = Math.max(0, Math.min(g.gw - 1.001, (x - g.x) / g.step)), fy = Math.max(0, Math.min(g.gh - 1.001, (y - g.y) / g.step));
+        const i = Math.floor(fx), j = Math.floor(fy), u = fx - i, v = fy - j, k = j * g.gw + i;
+        return (E[k] * (1 - u) + E[k + 1] * u) * (1 - v) + (E[k + g.gw] * (1 - u) + E[k + g.gw + 1] * u) * v;
+      };
+      const pa = geo.attributes.position, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+      zMid = eAt(cx, cy);
+      for (let k = 0; k < pa.count; k++) pa.setZ(k, eAt(cx + pa.getX(k), cy + pa.getY(k)) - zMid);
+      geo.computeBoundingSphere();
+    }
     // A planar mirror renders the scene (minus the grass) for reflections;
     // only on High, at reduced resolution.
     const size = new T.Vector2();
@@ -1416,7 +1461,7 @@ export class View3D {
       if (on) reflect.apply(w, args);
     };
     this.reflector = w;
-    w.position.set((x0 + x1) / 2, (y0 + y1) / 2, -0.12);
+    w.position.set((x0 + x1) / 2, (y0 + y1) / 2, zMid - 0.12);
     w.userData.ownMat = true;
     w.renderOrder = 2;
     group.add(w);

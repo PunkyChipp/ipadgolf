@@ -1,11 +1,11 @@
-import { buildHole as buildHoleRaw, windFor, HOLES, COURSES, courseOf, T, TERRAIN_NAMES } from './course.js?v=18';
+import { buildHole as buildHoleRaw, windFor, HOLES, COURSES, courseOf, T, TERRAIN_NAMES } from './course.js?v=20';
 import {
   simulateShot, CLUBS, PUTTER, PUTT_SCALES, SHAPES, FULL_SHAPES, SHORT_SHAPES, GEAR, GEAR_STATS, DEFAULT_GEAR, gearFor, MISHIT, meterWindow, lieEffect, suggestClub, suggestPuttScale, shotSeed, shotLabel, strikeOf, previewShot, flightParams, flightPoint,
-} from './sim.js?v=18';
-import { Renderer } from './render.js?v=18';
-import { Sound } from './audio.js?v=18';
-import { Link, makeCode, cleanCode } from './net.js?v=18';
-import { View3D, parseColor } from './view3d.js?v=18';
+} from './sim.js?v=20';
+import { Renderer } from './render.js?v=20';
+import { Sound } from './audio.js?v=20';
+import { Link, makeCode, cleanCode } from './net.js?v=20';
+import { View3D, parseColor } from './view3d.js?v=20';
 
 const $ = (s) => document.querySelector(s);
 
@@ -31,7 +31,9 @@ const MAX_ONLINE = 4;
 const NET_VERSION = 5;
 const METER_MIN = -0.15;
 const METER_MAX = 1.1;
-const DIFFICULTY = { casual: 1.5, standard: 1, pro: 0.72 };
+// Timing window by difficulty. Fun is forgiving and turns on silly physics.
+const DIFFICULTY = { casual: 1.5, standard: 1, pro: 0.72, fun: 1.5 };
+const funMode = () => store.get('difficulty', 'standard') === 'fun';
 
 const store = {
   get(k, d) {
@@ -357,6 +359,7 @@ function shotInput(power, acc) {
   return {
     club: U.club, aim: startLine(power), power, acc, puttScale: U.puttScale,
     shape: putter ? 0 : U.shape, spin: putter ? { x: 0, y: 0 } : { ...U.spin }, gear: myGear(),
+    ...(funMode() ? { fun: true } : {}),
   };
 }
 
@@ -403,7 +406,7 @@ function puttPlaysLike(ball) {
 // How much of a putt's path the preview shows, by difficulty.
 function puttPreviewShare() {
   const d = store.get('difficulty', 'standard');
-  return d === 'casual' ? 0.75 : d === 'pro' ? 0.25 : 0.45;
+  return d === 'casual' || d === 'fun' ? 0.75 : d === 'pro' ? 0.25 : 0.45;
 }
 
 function updatePreview() {
@@ -652,6 +655,7 @@ function takeShot(power, acc) {
   const input = shotInput(power, acc);
   if (!CLUBS[U.club].putter) sound.whoosh(power);
   const res = simulateShot(hole, pl.ball, input, wind, shotSeed(G.seed, pl.h, p, pl.shots));
+  if (input.fun) G.fun = true; // fun rounds don't set personal bests
   // The shooter's device is the authority on where the ball ends up: other
   // devices replay the shot for the animation, but floating-point maths can
   // differ between iPads, so they take this result as final.
@@ -780,6 +784,9 @@ function fireEvent(ev, a) {
     case 'spinback':
       if (mine || !G.simul) popup('Spin back!', '#9fe3ff', 1.4, 28);
       break;
+    case 'fun':
+      if (mine || !G.simul) popup(ev.label, '#ff9ff3', 1.6, 32);
+      break;
   }
 }
 
@@ -903,7 +910,7 @@ function showFinal() {
   if (G.players.length === 1) {
     const key = G.ck || 'links.all';
     const best = bestFor(key);
-    const isBest = G.mode === 'solo' && (best == null || totals[0] < best);
+    const isBest = G.mode === 'solo' && !G.fun && (best == null || totals[0] < best);
     if (isBest) setBest(key, totals[0]);
     title = isBest ? 'New personal best!' : `Round complete${best != null ? ` · best ${best}` : ''}`;
   } else {
@@ -2393,7 +2400,7 @@ function refreshTitle() {
   $('#courseMeta').textContent = cl.meta + (best == null ? '' : ` · Best ${best} (${fmtRel(best - cl.par)})`);
   $('#btnSound').textContent = sound.muted ? 'Sound off' : 'Sound on';
   const d = store.get('difficulty', 'standard');
-  $('#btnDiff').textContent = `Timing: ${d[0].toUpperCase() + d.slice(1)}`;
+  $('#btnDiff').textContent = d === 'fun' ? 'Timing: Fun (silly physics)' : `Timing: ${d[0].toUpperCase() + d.slice(1)}`;
 }
 
 function showCourses() {
@@ -2786,7 +2793,7 @@ on('#modeTurns', () => {
   sound.click();
 });
 on('#btnDiff', () => {
-  const order = ['casual', 'standard', 'pro'];
+  const order = ['casual', 'standard', 'pro', 'fun'];
   const d = store.get('difficulty', 'standard');
   store.set('difficulty', order[(order.indexOf(d) + 1) % order.length]);
   refreshTitle();
